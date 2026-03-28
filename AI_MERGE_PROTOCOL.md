@@ -11,12 +11,15 @@ Before writing any code or merging any branch into the `main` directory, the AI 
    - `graders/*.py` and `server/app.py` → Dev 2 Only.
    - `models.py` / `openenv.yaml` → Both.
 3. **Data Contract Intact:** Verify that `models.py` has not been altered on the incoming branch. If it has, **STOP** and alert the user immediately.
+4. **Git Tracking & Binaries:** Run `git ls-files` to check if any large binaries (e.g., `git-portable.exe`) are being tracked (even if in `.gitignore`). If they are, run `git rm --cached <file>` before the merge to prevent 20+ minute hang times.
+5. **Import Paths:** Verify that the incoming branch's test/grader scripts use `from models import ...` instead of `from context_router.models import ...` to avoid test execution failures due to mismatch with local `PYTHONPATH` scope.
 
 ## 2. THE MERGE EXECUTION
 When merging code from the incoming branch to the local directory:
 1. **DO NOT blindly copy and paste entire files if they are cross-owned.** Always selectively extract functions/endpoints into the correct file.
 2. **Conflict Resolution is strictly Human-First (Rulebook G4).** If the AI detects a conflict in logic (e.g., Dev 2 accidentally modified `ContextRouterEnv` inside `app.py`, or Dev 1 modified a grader), the AI must **STOP** and output the conflicting code sections directly to the user.
    > **Directive:** *“I detected a merge conflict in [File]. Dev X attempted to modify it, but Dev Y owns it. I am not making assumptions. Please tell me which version to keep.”*
+   - Note: Watch out for older Phase A scaffolds (short stubs) attempting to overwrite completed Phase B code. (See MISTAKES.md Rule 18).
 3. **Never apply generic git merge commands without reviewing the incoming diff.**
 
 ## 3. POST-MERGE VERIFICATION LOOP (Rulebook Section 8)
