@@ -1,5 +1,5 @@
 from typing import List
-from context_router.models import CacheObservation
+from models import CacheObservation
 
 def grader_hard(trajectory: List[CacheObservation]) -> float:
     """
