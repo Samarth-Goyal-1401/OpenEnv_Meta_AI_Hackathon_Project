@@ -302,6 +302,61 @@ When context window fills:
 
 ---
 
+### Session 3 — 2026-03-28 — Samarth (Dev 2) & AI Agent (Phase A/B)
+
+#### What was attempted
+
+- Conducted Dev 2 responsibilities for Phase A and B.
+- Wrote 18 mandatory logic tests across `test_grader_easy`, `medium`, `hard` using TDD principles.
+- Created stub graders that securely return 0.5 and catch all exceptions (returning 0.0), completely avoiding integer returns.
+- Defined the initial Pydantic task schema in `tasks/task_definitions.py` containing 3 environments of varying VRAM/token pressures.
+- Added `/tasks`, `/grader`, and `/baseline` endpoints to `server/app.py` in compliance with `openenv` data contracts and Hackathon requirements.
+- Re-ran `openenv validate --verbose` successfully.
+
+#### MISTAKE LOG
+
+| # | What went wrong | Error message / symptom | File / line |
+|---|----------------|------------------------|-------------|
+| 1 | `__init__.py` attempted to export non-existent `ContextRouterEnv` from `client.py` | `ImportError: cannot import name 'ContextRouterEnv' from 'context_router.client'` | `context_router/__init__.py:9` |
+| 2 | `pytest` collection failed due to absolute module pathing `context_router.models` | `ModuleNotFoundError: No module named 'context_router'` | `tests/test_grader_easy.py:2` |
+
+#### RESOLUTION
+
+| Mistake # | Root cause | Fix applied | Verified? |
+|-----------|-----------|-------------|-----------|
+| 1 | Remnant of pre-refactor client structure | Deleted line exporting `ContextRouterEnv` | YES |
+| 2 | `pytest` runs `tests/` as local scripts without installing the package | Changed imports to local package references (`from models import ...`) | YES |
+
+#### Current status
+
+- models.py: **COMPLETE (schema-v1)**
+- server/context_env.py: **IN PROGRESS (STUB ONLY)** (Owned by Dev 1)
+- server/app.py: **COMPLETE**
+- client.py: **COMPLETE**
+- graders/grader_*.py: **COMPLETE** (Stub logic returning 0.5)
+- tasks/task_definitions.py: **COMPLETE**
+- tests/*.py: **COMPLETE** (18/18 mandatory tests passed)
+- baseline/run_baseline.py: **NOT STARTED**
+- openenv.yaml: **COMPLETE**
+- pyproject.toml: **COMPLETE**
+- Dockerfile: **COMPLETE**
+- README.md: **NOT STARTED**
+- openenv build completes: **NO** (not tried)
+- openenv validate passes locally: **YES**
+- HF Space deployed: **NO**
+- HF Space /health 200: **NO**
+
+#### Open problems discovered this session
+
+- *(No current blockers. Ready for Phase C).*
+
+#### Next session: start here
+
+> Hand off to Dev 1 to verify trajectory schema and proceed with Phase C (Baseline Script) and Phase D (Polish).
+
+
+---
+
 ## TEMPLATE FOR NEW SESSION ENTRY
 
 
