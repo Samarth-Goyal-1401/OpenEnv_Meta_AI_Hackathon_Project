@@ -27,3 +27,9 @@ venv/
 build/
 dist/
 *.egg-info/
+
+# Git & Staging Transients
+PortableGit/
+git-portable.exe
+dev2_staging.zip
+dev2_staging/
