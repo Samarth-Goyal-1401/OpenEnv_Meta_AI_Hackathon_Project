@@ -483,7 +483,39 @@ When context window fills:
 
 #### Next session: start here
 
-> **Both devs:** Phase C begins. Dev 2 implements real grader logic (replacing 0.5 stubs with actual scoring from trajectory data). Dev 1 verifies `openenv validate --verbose` still passes after merge. Then both proceed to Docker build and baseline script.
+> **Phase C COMPLETE.** Moving to **Phase D**. We must Dockerize, write README.md, and `openenv push`.
+
+---
+
+### Session 6 — 2026-03-29 — Samarth (Dev 2) + AI Agent (Phase C)
+
+#### What was attempted
+
+- Created isolated branch `dev2/phase-c-baseline`.
+- Authored the evaluation runner `context_router/baseline/run_baseline.py` using `EnvClient`.
+- Handled async issues (openenv clients use WebSockets) and `max_concurrent_envs=1` limits.
+- Tested and successfully received 0 exit codes and printed 3 float scores.
+- Cleanly deleted Duplicate endpoints inside `app.py` created from the AIs merging.
+
+#### MISTAKE LOG
+
+| # | What went wrong | Error message / symptom | File / line | Correction / Mitigation |
+|---|----------------|------------------------|-------------|-------------------------|
+| 1 | Sync `reset()` and `step()` crashed on `model_dump()` | `coroutine object has no attribute model_dump` | `baseline/run_baseline.py` | Refactored runner to use Python `asyncio` natively. |
+| 2 | Grader import failed via API call | `ModuleNotFoundError: No module named 'models'` | `graders/grader_*.py` | Hardcoded absolute paths (`from context_router.models import`) to survive FastAPI environment. |
+| 3 | Max concurrency limit crashed midway | `Server at capacity: 1/1 sessions active.` | `baseline/run_baseline.py` | Initialized only *one* `MyEnv` client inside `main()` and reused it. |
+
+#### Current status
+
+- models.py: **COMPLETE**
+- server/context_env.py: **COMPLETE**
+- server/app.py: **COMPLETE**
+- client.py: **COMPLETE**
+- graders/grader_*.py: **COMPLETE**
+- tasks/task_definitions.py: **COMPLETE**
+- baseline/run_baseline.py: **COMPLETE (Verified E2E)**
+- openenv.yaml: **COMPLETE**
+- openenv validate passes locally: **YES**
 
 ---
 
