@@ -6,7 +6,7 @@
 
 """Context Router Environment."""
 
-from .client import ContextRouterEnv
+from .server.context_env import ContextRouterEnv
 from .models import CacheAction, CacheObservation
 from .client import MyEnv
 
@@ -14,4 +14,5 @@ __all__ = [
     "CacheAction",
     "CacheObservation",
     "MyEnv",
+    "ContextRouterEnv",
 ]
