@@ -102,6 +102,8 @@ These are NOT mistakes we made, but misconceptions corrected BEFORE they could b
 | 16 | Git Push hangs for 20+ mins | A large binary (`git-portable.exe`) was tracked in Git despite being in `.gitignore`. Required `git rm --cached git-portable.exe` to fix push speeds. | Session 5 Merge Log |
 | 17 | `ModuleNotFoundError` during tests | Remote branches pushed absolute imports (`from context_router.models import ...`) which break local `PYTHONPATH` test configs. Always use local `from models import ...`. | Session 5 Merge Log |
 | 18 | Overwriting active logic with scaffolds | Dev 2 pushed an older 185-line stub of `context_env.py` over Dev 1's 394-line implementation. Always `git fetch` and `git pull origin main` before starting a branch to avoid pushing stale scaffolds. | Session 5 Merge Log |
+| 19 | Git push hangs indefinitely with no output | Windows hidden `git-credential-helper-selector.exe` GUI prompt blocks the terminal script. Use `https://<PAT>@github.com/...` instead to bypass credential manager. | Session 5 Merge Log |
+| 20 | Git push fails with `403 Permission Denied` | Developer hasn't clicked "Accept Invite" for repository collaboration, or the GitHub PAT is missing the `repo` scope. Ensure both are satisfied. | Session 5 Merge Log |
 
 ---
 
