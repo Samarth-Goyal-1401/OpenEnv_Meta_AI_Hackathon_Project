@@ -428,6 +428,60 @@ When context window fills:
 
 ---
 
+### Session 5 — 2026-03-29 — Shreyas (Dev 1) + AI Agent (Merge Ceremony)
+
+#### What was attempted
+
+- Executed full AI_MERGE_PROTOCOL merge ceremony to integrate Dev 2's GitHub push (Phase A/B) with Dev 1's local Phase B (full simulation logic).
+- Ran `git fetch origin` → discovered remote `main` was 1 commit ahead (`5aa8a8f`) with Dev 2's Phase A/B work.
+- Ran `git merge origin/main --no-commit --no-ff` → 2 conflicts: `MISTAKES.md`, `context_router/__init__.py`. `context_env.py` auto-resolved to Dev 1's version (CORRECT).
+- Resolved `MISTAKES.md`: preserved BOTH teams' session logs (Dev 2's Session 3 + Dev 1's existing sessions).
+- Resolved `context_router/__init__.py`: kept `ContextRouterEnv` export from Dev 1 (required for integration smoke test).
+- Fixed `context_router.models` → `models` import in all 3 graders (Dev 2's remote files used absolute import, breaking `PYTHONPATH=context_router/` test setup).
+- Ran all verification checks: smoke test ✅, 18/18 pytest ✅, grader integration ✅.
+- Committed merge as `4088f7c`, tagged `merge-20260329-0002`, pushed to `origin/main`.
+
+#### MISTAKE LOG
+
+| # | What went wrong | Error message / symptom | File / line | Correction / Mitigation |
+|---|----------------|------------------------|-------------|-------------------------|
+| 1 | Dev 2's remote graders used `from context_router.models import` | `ModuleNotFoundError: No module named 'context_router'` during pytest collection | `graders/grader_easy.py`, `grader_medium.py`, `grader_hard.py` line 2 | Changed to `from models import CacheObservation` (consistent with established PYTHONPATH pattern) |
+| 2 | Dev 2 pushed `context_env.py` stub (185 lines) over Dev 1's full implementation (394 lines) | context_env.py ownership violation (TEAM_RULEBOOK Section 0) | `context_router/server/context_env.py` | Git auto-resolved to Dev 1's version (correct). Dev 2 had pushed from older scaffold before Dev 1's work was published. |
+
+#### RESOLUTION
+
+| Mistake # | Root cause | Fix applied | Verified? |
+|-----------|-----------|-------------|-----------|
+| 1 | Dev 2 used absolute package path; runs correctly when installed but not with `PYTHONPATH=context_router/` test setup | Changed to local `from models import` in all 3 graders | YES — 18/18 pytest passed |
+| 2 | Dev 2 pushed Phase A scaffold from before Dev 1 pushed full Phase B implementation | Git merge correctly auto-resolved to Dev 1's (longer/newer) version | YES — smoke test confirmed 394-line version active |
+
+#### Current status
+
+- models.py: **COMPLETE**
+- server/context_env.py: **COMPLETE (Full Phase B simulation logic, 394 lines)**
+- server/app.py: **COMPLETE (Dev 2's endpoints: /tasks, /grader, /baseline merged in)**
+- client.py: **COMPLETE**
+- graders/grader_*.py: **COMPLETE (stub returning 0.5 — ready for Phase C real logic)**
+- tasks/task_definitions.py: **COMPLETE**
+- tests/*.py: **COMPLETE (18/18 passing)**
+- baseline/run_baseline.py: **NOT STARTED**
+- openenv.yaml: **COMPLETE**
+- README.md: **NOT STARTED**
+- openenv build completes: **NO**
+- openenv validate passes locally: **YES**
+- HF Space deployed: **NO**
+- Pushed to GitHub main: **YES** (commit `4088f7c`, tag `merge-20260329-0002`)
+
+#### Open problems discovered this session
+
+- `git-portable.exe` (58.90 MB) in repo root triggers GitHub LFS warning on push. Not blocking, but should be removed or `.gitignore`d before final submission push.
+
+#### Next session: start here
+
+> **Both devs:** Phase C begins. Dev 2 implements real grader logic (replacing 0.5 stubs with actual scoring from trajectory data). Dev 1 verifies `openenv validate --verbose` still passes after merge. Then both proceed to Docker build and baseline script.
+
+---
+
 ## DOMAIN DECISION LOG
 
 > Record the domain choice decision and rationale here once made.
