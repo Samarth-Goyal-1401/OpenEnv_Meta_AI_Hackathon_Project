@@ -248,7 +248,7 @@ When context window fills:
 
 ---
 
-### Session 2 — 2026-03-28 — Dev 2 (Saksham) & AI Agent (Phase 0 Scaffold)
+### Session 2 — 2026-03-28 — Samarth (Dev 2) & AI Agent (Phase 0 Scaffold)
 
 #### What was attempted
 
