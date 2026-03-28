@@ -85,37 +85,7 @@ def run_grader(req: GraderRequest):
 def run_baseline_endpoint():
     return {"easy": 0.5, "medium": 0.5, "hard": 0.5}
 
-from typing import List
-from pydantic import BaseModel
 
-class GraderRequest(BaseModel):
-    task_id: str
-    trajectory: List[CacheObservation]
-
-@app.get("/tasks")
-def get_tasks():
-    from context_router.tasks.task_definitions import TASKS
-    return [task.model_dump() for task in TASKS]
-
-@app.post("/grader")
-def run_grader(req: GraderRequest):
-    from context_router.graders.grader_easy import grader_easy
-    from context_router.graders.grader_medium import grader_medium
-    from context_router.graders.grader_hard import grader_hard
-    
-    score = 0.0
-    if req.task_id == "easy":
-        score = grader_easy(req.trajectory)
-    elif req.task_id == "medium":
-        score = grader_medium(req.trajectory)
-    elif req.task_id == "hard":
-        score = grader_hard(req.trajectory)
-        
-    return {"score": max(0.0, min(1.0, float(score)))}
-
-@app.post("/baseline")
-def run_baseline_endpoint():
-    return {"easy": 0.5, "medium": 0.5, "hard": 0.5}
 def main(host: str = "0.0.0.0", port: int = 8000):
     """
     Entry point for direct execution via uv run or python -m.

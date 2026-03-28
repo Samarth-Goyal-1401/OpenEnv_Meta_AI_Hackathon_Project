@@ -1,5 +1,8 @@
 from typing import List
-from models import CacheObservation
+try:
+    from context_router.models import CacheObservation
+except ImportError:
+    from models import CacheObservation
 
 def grader_medium(trajectory: List[CacheObservation]) -> float:
     """
