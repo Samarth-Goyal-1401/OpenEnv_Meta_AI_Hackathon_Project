@@ -799,3 +799,27 @@ python baseline/run_baseline.py --base-url https://<your-space>.hf.space
 1. Ensure stable internet/VPN/proxy settings for Docker Desktop.
 2. Retry `docker pull python:3.11-slim` until successful.
 3. Re-run `openenv build`, then proceed with full container endpoint checks.
+
+## Session 12 - March 29, 2026 - Dev 1 (Shreyas) Gate 2 Retry with Hotspot
+
+### What improved
+- Docker Hub connectivity recovered (`docker pull python:3.11-slim` succeeded).
+- `openenv build` progressed past image metadata/pull and package install stages.
+
+### New blocker found
+1. **Dockerfile missing `curl` before uv installer step**
+   - Build step tries: `curl -LsSf https://astral.sh/uv/install.sh | sh`
+   - Error: `/bin/sh: 1: curl: not found`
+   - Follow-up error: `mv: cannot stat '/root/.local/bin/uv'`
+
+### Why Gate 2 is still blocked
+- Local image `openenv-context_router` is not built yet.
+- Therefore container endpoint checks (`/health`, `/tasks`, `/reset`, `/grader`, `/baseline`) cannot run yet.
+
+### Ownership note (rulebook)
+- This is in Docker build config path (Dev 2-led area).
+- Dev 1 support status: blocker identified with exact failing line and cause.
+
+### Suggested fix for next pass
+- In Dockerfile install `curl` before uv install step (or install uv without curl dependency).
+- Re-run `openenv build`, then continue Step 3.4 checks.
