@@ -744,3 +744,38 @@ python baseline/run_baseline.py --base-url https://<your-space>.hf.space
    - `python baseline/run_baseline.py --base-url http://localhost:8000`
    - `openenv validate --verbose`
 4. Keep pushes on `dev1/env-core` only during ongoing phases; ask explicitly before any `main` push.
+
+## Session 10 - March 29, 2026 - Dev 1 (Shreyas) Phase 2 Continuation
+
+### What was attempted
+- Resume Gate 2 after Docker Desktop install.
+- Bring Docker daemon online and rerun `openenv build`.
+- Proceed toward container endpoint checks.
+
+### What broke (MISTAKE LOG)
+1. **Docker not on PATH in this shell**
+   - `docker` and `where docker` initially failed, although Docker binaries existed.
+   - `openenv build` failed with `[WinError 2]` until Docker bin path was injected for the command.
+
+2. **Docker daemon access mismatch by privilege context**
+   - Non-elevated Docker commands failed with permission denied on Docker named pipe.
+   - Elevated Docker command succeeded (`docker info`), confirming daemon availability only in elevated context from this runner.
+
+3. **Build instability due environment constraints**
+   - First retry: transient TLS handshake timeout pulling `python:3.11-slim` from Docker Hub.
+   - Next retry: progressed deeply but failed with `ResourceExhausted: cannot allocate memory` during apt package install in Docker build.
+
+### What fixed it (RESOLUTION)
+1. Launched Docker Desktop backend and confirmed server visibility via elevated `docker info`.
+2. Ran `openenv build` with Docker binary path prepended in command environment.
+3. Isolated remaining blocker to host/container resource limits, not Python package/import code.
+
+### Current stop point
+- `openenv build` still not green in this environment due memory exhaustion during Docker build.
+- Therefore, Step 3.4+ container endpoint checks and live deploy checks remain blocked.
+- `main` is untouched; all updates remain on `dev1/env-core`.
+
+### Smoother flow next run
+1. Ensure Docker Desktop memory allocation is increased (Desktop Settings -> Resources).
+2. Keep Docker CLI path available in shell before running `openenv build`.
+3. Re-run Gate 2 sequence only after successful local image build.
