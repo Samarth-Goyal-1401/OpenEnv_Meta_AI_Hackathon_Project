@@ -64,6 +64,7 @@ openenv build completes: YES
 Docker container responds to /reset: YES
 openenv validate passes locally: YES
 HF Space deployed: NO (Local build OK)
+Submission branch pushed: YES (dev2/final-verified-submission)
 README complete: YES
 Submission URL pasted: NO
 ```
@@ -627,6 +628,32 @@ Proceed to **Phase 2: Docker & Deployment**
 3. Test local container
 4. Deploy to HuggingFace Spaces
 5. Verify live deployment
+
+---
+
+## Session 8 — March 29, 2026 — Antigravity (Phase D Final Audit)
+
+### What was attempted
+- Final audit of external agent (`opencode`) refinements to graders and test suites.
+- Verification of Roadmap-compliant math with dense partial credit.
+- Comprehensive end-to-end validation sequence (`openenv validate`, `run_baseline.py`).
+- Branching and Remote Push for final submission handoff.
+
+### What broke (MISTAKE LOG)
+1. **Tool Formatting**: Encountered a malformed function call during `task.md` update.
+   - Resolution: Re-executed the tool call with proper formatting.
+
+### Current status
+✅ **SUBMISSION READY - BRANCH CREATED**
+- Grader Math: Verified (60/25/15 weights for Easy, 45/35/20 for Medium, 35/30/25/10 for Hard).
+- Baseline scores: Easy 0.0, Medium 0.3, Hard 0.7 (Expected for naive agent).
+- OpenEnv validate: **0 Errors**.
+- Submission branch: `dev2/final-verified-submission` pushed to origin.
+
+### Next session: start here
+> **PROJECT READY FOR FINAL SHIP.**
+1. Run `openenv push` to deploy the Dockerized environment to HF Spaces.
+2. Submit the resulting URL to the Hackathon portal.
 
 ---
 
