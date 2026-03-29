@@ -779,3 +779,23 @@ python baseline/run_baseline.py --base-url https://<your-space>.hf.space
 1. Ensure Docker Desktop memory allocation is increased (Desktop Settings -> Resources).
 2. Keep Docker CLI path available in shell before running `openenv build`.
 3. Re-run Gate 2 sequence only after successful local image build.
+
+## Session 11 - March 29, 2026 - Dev 1 (Shreyas) Gate 2 Retry
+
+### What was attempted
+- Re-ran Phase 2 Gate 2 after Docker daemon became available.
+- Retried `openenv build` and also direct `docker pull python:3.11-slim` to stabilize base image pull.
+
+### What broke (MISTAKE LOG)
+1. **Persistent Docker Hub TLS handshake timeouts**
+   - `openenv build` failed at Docker metadata/base image resolution with TLS handshake timeout.
+   - Direct `docker pull python:3.11-slim` also failed twice with TLS handshake timeout.
+
+### Conclusion
+- Current blocker is outbound network stability to `registry-1.docker.io`, not environment Python code.
+- Gate 2 cannot progress to container endpoint checks until base image pull succeeds.
+
+### Next smooth steps
+1. Ensure stable internet/VPN/proxy settings for Docker Desktop.
+2. Retry `docker pull python:3.11-slim` until successful.
+3. Re-run `openenv build`, then proceed with full container endpoint checks.
