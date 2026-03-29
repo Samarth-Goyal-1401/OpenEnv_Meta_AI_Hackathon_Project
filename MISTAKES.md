@@ -696,3 +696,51 @@ python baseline/run_baseline.py --base-url https://<your-space>.hf.space
 # → paste HF Space URL into submission form
 # → DEADLINE: April 7, 2026 — 11:59 PM IST
 ```
+
+---
+
+## Session 9 - March 29, 2026 - Dev 1 (Shreyas) Phase 2 Support Check
+
+### What was attempted
+- Continue Phase 2 as Dev 1 support only on `dev1/env-core`.
+- Verify `context_router/Dockerfile` and `context_router/pyproject.toml`.
+- Run `openenv build` and prepare for container endpoint checks.
+- Confirm validator status before any merge activity.
+
+### What broke (MISTAKE LOG)
+1. **Sandbox temp-dir permission failure on first build attempt**
+   - Command: `openenv build`
+   - Error: `[WinError 5] Access is denied` on temp directory creation.
+   - Impact: Build did not start until command was re-run with elevated permissions.
+
+2. **Docker CLI not installed/available**
+   - Command: `openenv build` (elevated)
+   - Error: `[WinError 2] The system cannot find the file specified` during `docker build`.
+   - Confirmed by `where docker` returning nothing.
+   - Impact: Could not complete Step 3.3+ (`docker run`, endpoint checks in container, HF deploy verification).
+
+### What fixed it (RESOLUTION)
+1. Re-ran build with elevated execution so `openenv` could create/copy temp build context.
+2. Isolated true blocker to missing Docker binary (not application code regression).
+3. Confirmed project spec integrity is still healthy via:
+   - `openenv validate --verbose` -> `[OK] context_router: Ready for multi-mode deployment`
+
+### Dev 1-safe status at stop point
+- `context_router/Dockerfile` verified:
+  - Base image arg line preserved (`ARG BASE_IMAGE=openenv-base:latest`)
+  - Uses `uv sync` path, exposes `8000`, includes healthcheck and uvicorn command.
+- `context_router/pyproject.toml` verified:
+  - Python range remains `>=3.10,<3.13`
+  - No forbidden libs (`torch`, `cuda`, `tensorflow`) present.
+- No `main` merge or `main` push performed.
+
+### Smoother flow next run
+1. Before `openenv build`, run `where docker` and `docker --version`.
+2. If Docker is missing, install/start Docker Desktop first.
+3. Run Phase 2 sequence from `context_router/`:
+   - `openenv build`
+   - `docker run -d -p 8000:8000 openenv-context_router`
+   - endpoint checks (`/health`, `/tasks`, `/reset`, `/grader`, `/baseline`)
+   - `python baseline/run_baseline.py --base-url http://localhost:8000`
+   - `openenv validate --verbose`
+4. Keep pushes on `dev1/env-core` only during ongoing phases; ask explicitly before any `main` push.
