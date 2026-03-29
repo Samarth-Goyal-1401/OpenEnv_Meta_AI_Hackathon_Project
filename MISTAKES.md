@@ -849,3 +849,41 @@ python baseline/run_baseline.py --base-url https://<your-space>.hf.space
 ### Remaining scope
 - HF deploy checks (Step 3.5/3.6) still pending for final Gate 2 closure.
 - `main` not touched; changes remain on `dev1/env-core`.
+
+## Session 14 - March 29, 2026 - Main Branch HF Deployment (Both)
+
+### What was attempted
+- Switch to latest merged `main` and complete final HF deployment sequence.
+- Validate local readiness before deploy (`openenv validate`, standalone env test, grader test suite).
+- Run `openenv push` for `ShreyasDubey/context_router` and start live verification.
+
+### What broke (MISTAKE LOG)
+1. **Windows console encoding issue during `openenv push`**
+   - Initial push attempts errored on Unicode output (`charmap` codec cannot encode symbols).
+   - Mitigation needed: set `PYTHONIOENCODING=utf-8` and `PYTHONUTF8=1` in shell.
+
+2. **HF metadata validation failure in README frontmatter**
+   - Push failed with: invalid README metadata (`colorFrom`/`colorTo` not accepted).
+   - Root cause: auto-inserted/legacy metadata mismatch for HF card schema.
+
+3. **Live endpoint checks timed out while Space was building**
+   - `/health` timeout was observed immediately after deployment.
+   - Root cause: expected cold-start/build window; Space status was still "Building".
+
+### What fixed it (RESOLUTION)
+1. Added valid HF frontmatter explicitly to `context_router/README.md` and removed emoji line to avoid charset edge cases.
+2. Committed and pushed README fix on `main` (`7739b15`).
+3. Re-ran `openenv push`: deployment completed successfully and Space URL was produced.
+4. Confirmed timeout cause by checking Space status message: "currently building".
+
+### Current status
+- HF deployment command succeeded.
+- Space exists at `https://huggingface.co/spaces/ShreyasDubey/context_router`.
+- Final live checks are pending until status flips to `Running`:
+  - `/health`, `/tasks`, `/reset`
+  - `baseline/run_baseline.py --base-url <hf-space-url>`
+
+### Smoother flow next run
+1. Always export UTF-8 env vars before `openenv push` on Windows.
+2. Keep explicit valid HF frontmatter in README before deploying.
+3. After push, wait for Space status `Running` before live endpoint verification.
