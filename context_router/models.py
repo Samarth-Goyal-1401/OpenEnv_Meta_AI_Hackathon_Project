@@ -47,6 +47,7 @@ class CacheAction(Action):
     Sacred fields (do NOT rename):
       target_block_id : int
       tactic          : EvictionTactic
+      priority        : int | None (hard-task signal, optional)
     """
 
     target_block_id: int = Field(
@@ -56,6 +57,12 @@ class CacheAction(Action):
     tactic: EvictionTactic = Field(
         ...,
         description="Eviction tactic to apply (evict | retain | compress)",
+    )
+    priority: int | None = Field(
+        default=None,
+        ge=1,
+        le=5,
+        description="Optional hard-task priority signal (1=lowest importance, 5=highest)",
     )
 
 

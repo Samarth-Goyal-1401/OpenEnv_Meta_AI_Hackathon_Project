@@ -1,29 +1,43 @@
-from typing import Dict, Any, List
-from pydantic import BaseModel, Field
+from typing import Any
 
-class ContextRouterTask(BaseModel):
-    task_id: str = Field(..., description="Unique task identifier (easy, medium, hard)")
-    description: str = Field(..., description="Human-readable description of the task requirements")
-    max_steps: int = Field(50, description="Maximum allowed steps per episode")
-    kwargs: Dict[str, Any] = Field(default_factory=dict, description="Environment-specific configuration parameters")
 
-TASKS: List[ContextRouterTask] = [
-    ContextRouterTask(
-        task_id="easy",
-        description="Low incoming token volume, static retention. Survive 50 steps without OOM.",
-        max_steps=50,
-        kwargs={"token_arrival_rate": 10, "peak_vram_limit": 0.5}
-    ),
-    ContextRouterTask(
-        task_id="medium",
-        description="Burst token arrivals with dynamic block ages. Requires selective eviction.",
-        max_steps=50,
-        kwargs={"token_arrival_rate": 50, "peak_vram_limit": 0.75}
-    ),
-    ContextRouterTask(
-        task_id="hard",
-        description="High token volume, tight VRAM constraints. Requires optimal block compression and eviction.",
-        max_steps=50,
-        kwargs={"token_arrival_rate": 200, "peak_vram_limit": 0.9}
-    )
-]
+TASKS: dict[str, dict[str, Any]] = {
+    "easy": {
+        "name": "easy",
+        "difficulty": "easy",
+        "description": "Reduce VRAM below 50% without OOM using evict/retain only.",
+        "action_schema": {
+            "target_block_id": {"type": "int", "description": "Index of memory block"},
+            "tactic": {"type": "string", "values": ["evict", "retain"]},
+        },
+    },
+    "medium": {
+        "name": "medium",
+        "difficulty": "medium",
+        "description": "Reduce VRAM below 40% while preserving important context blocks.",
+        "action_schema": {
+            "target_block_id": {"type": "int", "description": "Index of memory block"},
+            "tactic": {
+                "type": "string",
+                "values": ["evict", "retain", "compress"],
+            },
+        },
+    },
+    "hard": {
+        "name": "hard",
+        "difficulty": "hard",
+        "description": "Handle RAG spikes under tight capacity with priority-aware control.",
+        "action_schema": {
+            "target_block_id": {"type": "int", "description": "Index of memory block"},
+            "tactic": {
+                "type": "string",
+                "values": ["evict", "retain", "compress"],
+            },
+            "priority": {
+                "type": "int",
+                "values": [1, 2, 3, 4, 5],
+                "description": "Hard-task priority signal (1=lowest importance, 5=highest)",
+            },
+        },
+    },
+}

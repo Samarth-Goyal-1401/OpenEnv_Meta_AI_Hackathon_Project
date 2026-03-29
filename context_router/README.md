@@ -1,76 +1,128 @@
-# Edge GPU Context Router — OpenEnv Environment
+# Edge GPU Context Router - OpenEnv Environment
 
-## 1. Overview
-The **Edge GPU Context Router** simulates a KV-cache management system for local LLM inference on consumer-grade hardware. The RL agent acts as a context router, deciding which attention blocks to keep in VRAM, which to compress, and which to evict to prevent Out-of-Memory (OOM) crashes while maintaining generative quality.
+## Overview
+Edge GPU Context Router simulates memory management for local LLM inference under VRAM pressure.
+The agent decides which memory block to `evict`, `retain`, or `compress` to keep usage stable
+while preserving critical context (`system_prompt`, `code_snippet`).
 
-## 2. Action Space
-The agent emits a `CacheAction` with the following schema:
+Note on units: the environment models VRAM pressure using token-capacity as a proxy for KV-cache
+memory usage. `vram_utilization` is reported as a fraction in `[0.0, 1.0]` of the current token
+load divided by the task's configured capacity, not literal GPU GB.
 
+## Action Space
+| Field | Type | Valid Values | Description |
+|---|---|---|---|
+| `target_block_id` | `int` | `>= 0` | Block identifier selected for this step. |
+| `tactic` | `EvictionTactic` | `evict`, `retain`, `compress` | Operation applied to the chosen block. |
+| `priority` | `int \| None` | `1..5` or omitted | Optional hard-task signal (`1` lowest importance, `5` highest). |
+
+Task-specific schemas:
+- Easy: `target_block_id`, `tactic` in `evict|retain`
+- Medium: `target_block_id`, `tactic` in `evict|retain|compress`
+- Hard: `target_block_id`, `tactic` in `evict|retain|compress`, and `priority` in `1..5`
+
+## Observation Space
 | Field | Type | Description |
-|-------|------|-------------|
-| `target_block_id` | `int` | Unique ID of the memory block to manipulate. |
-| `tactic` | `EvictionTactic` | Operation: `RETAIN` (0), `EVICT` (1), `COMPRESS` (2). |
+|---|---|---|
+| `vram_utilization` | `float` | Current VRAM usage ratio in `[0.0, 1.0]`. |
+| `incoming_tokens` | `int` | New token load at the current step. |
+| `memory_blocks` | `List[MemoryBlockInfo]` | Snapshot of block metadata (`block_id`, `block_type`, `attention_score`, `token_count`, `age`). |
+| `oom_triggered` | `bool` | True when capacity overflow occurs. |
+| `message` | `str` | Human-readable status for the step. |
+| `done` | `bool` | Episode completion flag (inherited from OpenEnv `Observation`). |
+| `reward` | `float` | Step reward value (inherited from OpenEnv `Observation`). |
 
-## 3. Observation Space
-The environment returns a `CacheObservation` at each step:
+## Tasks
+| Task | Difficulty | Description | Success Condition |
+|---|---|---|---|
+| `easy` | easy | Lower VRAM below 50% with a simple tactic set. | Final `vram_utilization < 0.5` and no OOM. |
+| `medium` | medium | Balance VRAM reduction with context retention. | Final `vram_utilization < 0.4`, no OOM, retain `system_prompt` and most high-attention blocks. |
+| `hard` | hard | Survive high-pressure workloads with stability and retention. | Reach 50 steps with no OOM, low average VRAM, and strong critical-block retention. |
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `vram_utilization` | `float` | Current VRAM usage (0.0 to 1.0). |
-| `incoming_tokens` | `int` | Number of tokens in the current request. |
-| `memory_blocks` | `List` | List of `MemoryBlockInfo` (id, type, attention, etc.). |
-| `oom_triggered` | `bool` | True if the memory limit was exceeded. |
-| `message` | `str` | Status update or error data. |
+## Reward Function
+Final episode grading is done by task-specific graders.
 
-## 4. Tasks
-| Task | Difficulty | Pressure | Description |
-|------|------------|----------|-------------|
-| **Easy** | 0.1 | Low | Maintain VRAM < 0.5 under uniform load. |
-| **Medium** | 0.5 | Medium | Power-law access; must keep high-attention blocks. |
-| **Hard** | 0.9 | High | RAG spikes; requires aggressive compression/eviction. |
-
-## 5. Reward Function
-Graders provide a final float score `[0.0, 1.0]` based on:
-- **VRAM Efficiency (Variable %)**: Target thresholds (0.5 for Easy, 0.4 for Medium, 0.3 for Hard).
-- **Attention/Block Retention**: Tracks `system_prompt` and high-attention blocks.
-- **Survival (Variable %)**: Rewards completing the full episode (50 steps).
-- **OOM Penalties**: Direct reduction for Out-of-Memory events.
-
-**Easy Goal**: Manage `vram_utilization` < 0.5 without OOM.
-**Medium Goal**: Manage `vram_utilization` < 0.4 while retaining high-attention context.
-**Hard Goal**: Manage `vram_utilization` < 0.3 under high token/RAG pressure.
-
-## 6. Setup & Execution
-This environment is built using `openenv-core`.
-
-```bash
-# 1. Start the server
-python -m context_router.server.app
-
-# 2. Run the baseline evaluation
-python context_router/baseline/run_baseline.py --base-url http://localhost:8000
+Easy grader:
+```text
+if final_vram < 0.5 and oom_events == 0: score = 1.0
+else:
+  vram_drop = max(0, vram_initial - vram_final)
+  baseline = min(0.45, (vram_drop / max(vram_initial, 1e-6)) * 0.45)
+  survival = min(0.35, (steps / 50) * 0.35)
+  below_target_bonus = 0.20 if final_vram < 0.5 else 0.0
+  oom_penalty = min(0.6, 0.2 * oom_events)
+  score = clamp(baseline + survival + below_target_bonus - oom_penalty)
 ```
 
-### Example Usage (Python Client)
+Medium grader:
+```text
+if final_vram < 0.4 and oom_events == 0 and system_kept and retention_ratio >= 0.8:
+  score = 1.0
+else:
+  vram_component = min(0.40, (vram_drop / max(vram_initial, 1e-6)) * 0.40)
+  retention_component = (0.25 if system_kept else 0.0) + (retention_ratio * 0.20)
+  survival_component = min(0.15, (steps / 50) * 0.15)
+  target_bonus = 0.10 if final_vram < 0.4 else 0.0
+  oom_penalty = min(0.6, 0.25 * oom_events)
+  score = clamp(vram_component + retention_component + survival_component + target_bonus - oom_penalty)
+```
+
+Hard grader:
+```text
+if oom_events == 0 and steps >= 50 and avg_vram < 0.3 and retention_ratio >= 0.8:
+  score = 1.0
+else:
+  survival_component = min(0.35, (steps / 50) * 0.35)
+  retention_component = min(0.30, retention_ratio * 0.30)
+  vram_component = min(0.25, max(0.0, (1.0 - avg_vram) * 0.25))
+  stability_component = min(0.10, max(0.0, 1.0 - (max_vram - min_vram)) * 0.10)
+  oom_penalty = min(0.8, 0.30 * oom_events)
+  score = clamp(survival_component + retention_component + vram_component + stability_component - oom_penalty)
+```
+
+Hard priority mechanism in the environment:
+```text
+expected_priority = heuristic(block_type, attention, age, token_count) in [1..5]
+if hard and priority is missing or far from expected:
+  inject extra priority_spill tokens (80 or 160)
+```
+
+## Setup Instructions
+```bash
+python -m venv .venv
+.venv\Scripts\activate
+pip install -e .
+uvicorn context_router.server.app:app --host 0.0.0.0 --port 8000
+set CONTEXT_ROUTER_BASE_URL=<BASE_URL>
+```
+
+## Example Episode
 ```python
+import asyncio
+import os
+
 from context_router.client import MyEnv
 from context_router.models import CacheAction, EvictionTactic
-import asyncio
 
-async def main():
-    env = MyEnv("http://localhost:8000")
-    obs = await env.reset(seed=42)
-    
-    # Naive policy: Evict first block
-    action = CacheAction(target_block_id=0, tactic=EvictionTactic.EVICT)
-    res = await env.step(action)
-    print(f"VRAM: {res.observation.vram_utilization}")
 
-asyncio.run(main())
+async def run_episode() -> None:
+    base_url = os.environ["CONTEXT_ROUTER_BASE_URL"]
+    env = MyEnv(base_url)
+    reset_result = await env.reset(seed=42)
+    obs = reset_result.observation
+
+    for _ in range(10):
+        blocks = obs.memory_blocks
+        target_block_id = blocks[0].block_id if blocks else 0
+        action = CacheAction(target_block_id=target_block_id, tactic=EvictionTactic.EVICT)
+        step_result = await env.step(action)
+        obs = step_result.observation
+        if step_result.done:
+            break
+
+    print("Final VRAM:", obs.vram_utilization)
+
+
+if __name__ == "__main__":
+    asyncio.run(run_episode())
 ```
-
----
-**Submission Metadata**
-- **Framework:** OpenEnv v1.x
-- **Language:** Python 3.12+
-- **Deterministic:** Yes (via Seed)

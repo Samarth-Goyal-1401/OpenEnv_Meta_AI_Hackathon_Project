@@ -1,56 +1,74 @@
-import pytest
-try:
-    from context_router.models import CacheObservation
-    from context_router.graders.grader_easy import grader_easy
-except ImportError:
-    from models import CacheObservation
-    from graders.grader_easy import grader_easy
+from context_router.graders.grader_easy import grader_easy
 
 
-def _make_obs(vram=0.5, incoming=10, oom=False):
-    return CacheObservation(
-        vram_utilization=vram,
-        incoming_tokens=incoming,
-        memory_blocks=[],
-        oom_triggered=oom,
-        message="ok",
-    )
+PERFECT = [
+    {
+        "vram_utilization": 0.80,
+        "incoming_tokens": 120,
+        "memory_blocks": [],
+        "oom_triggered": False,
+        "message": "start",
+        "done": False,
+        "reward": 0.0,
+    },
+    {
+        "vram_utilization": 0.30,
+        "incoming_tokens": 80,
+        "memory_blocks": [],
+        "oom_triggered": False,
+        "message": "target reached",
+        "done": True,
+        "reward": 0.0,
+    },
+]
+
+EMPTY = []
+
+PARTIAL = [
+    {
+        "vram_utilization": 0.90,
+        "incoming_tokens": 140,
+        "memory_blocks": [],
+        "oom_triggered": False,
+        "message": "start",
+        "done": False,
+        "reward": 0.0,
+    },
+    {
+        "vram_utilization": 0.62,
+        "incoming_tokens": 110,
+        "memory_blocks": [],
+        "oom_triggered": False,
+        "message": "improved but above target",
+        "done": True,
+        "reward": 0.0,
+    },
+]
 
 
-def test_grader_easy_type():
-    obs = [_make_obs()]
-    score = grader_easy(obs)
-    assert isinstance(score, float), "Grader must return float"
+def test_perfect_returns_one() -> None:
+    assert grader_easy(PERFECT) == 1.0
 
 
-def test_grader_easy_empty():
-    score = grader_easy([])
-    assert isinstance(score, float), "Grader must handle empty trajectory securely"
-    assert 0.0 <= score <= 1.0, "Empty score must be clamped"
+def test_empty_returns_zero() -> None:
+    assert grader_easy(EMPTY) == 0.0
 
 
-def test_grader_easy_clamped():
-    obs = [_make_obs()]
-    score = grader_easy(obs)
-    assert 0.0 <= score <= 1.0, "Score must be bounded [0.0, 1.0]"
+def test_partial_between_zero_and_one() -> None:
+    score = grader_easy(PARTIAL)
+    assert 0.0 < score < 1.0
 
 
-def test_grader_easy_deterministic():
-    obs = [_make_obs()]
-    score1 = grader_easy(obs)
-    score2 = grader_easy(obs)
-    assert score1 == score2, (
-        "Grader must return deterministic score for same trajectory"
-    )
+def test_returns_float() -> None:
+    assert isinstance(grader_easy(PARTIAL), float)
 
 
-def test_grader_easy_perfect():
-    obs = [_make_obs(vram=0.1, incoming=10, oom=False)]
-    score = grader_easy(obs)
-    assert score >= 0.0, "Perfect simulation trajectory runs without exception"
+def test_deterministic() -> None:
+    assert grader_easy(PARTIAL) == grader_easy(PARTIAL)
 
 
-def test_grader_easy_partial():
-    obs = [_make_obs(vram=0.9, incoming=50, oom=True)]
-    score = grader_easy(obs)
-    assert score >= 0.0, "Partial simulation trajectory runs without exception"
+def test_clamped() -> None:
+    corrupted = [{"vram_utilization": -5.0, "oom_triggered": False}]
+    score = grader_easy(corrupted)
+    assert 0.0 <= score <= 1.0
+

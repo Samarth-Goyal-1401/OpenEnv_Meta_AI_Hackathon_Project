@@ -1,50 +1,88 @@
-import pytest
-try:
-    from context_router.models import CacheObservation
-    from context_router.graders.grader_medium import grader_medium
-except ImportError:
-    from models import CacheObservation
-    from graders.grader_medium import grader_medium
+from context_router.graders.grader_medium import grader_medium
 
 
-def _make_obs(vram=0.5, incoming=10, oom=False):
-    return CacheObservation(
-        vram_utilization=vram,
-        incoming_tokens=incoming,
-        memory_blocks=[],
-        oom_triggered=oom,
-        message="ok",
-    )
+def _block(block_type: str, attention: float) -> dict:
+    return {
+        "block_id": 0,
+        "block_type": block_type,
+        "attention_score": attention,
+        "token_count": 128,
+        "age": 0,
+    }
 
 
-def test_grader_medium_type():
-    obs = [_make_obs()]
-    score = grader_medium(obs)
-    assert isinstance(score, float), "Grader must return float"
+PERFECT = [
+    {
+        "vram_utilization": 0.85,
+        "incoming_tokens": 120,
+        "memory_blocks": [_block("system_prompt", 1.0), _block("code_snippet", 0.9)],
+        "oom_triggered": False,
+        "message": "start",
+        "done": False,
+        "reward": 0.0,
+    },
+    {
+        "vram_utilization": 0.30,
+        "incoming_tokens": 90,
+        "memory_blocks": [_block("system_prompt", 1.0), _block("code_snippet", 0.85)],
+        "oom_triggered": False,
+        "message": "target reached",
+        "done": True,
+        "reward": 0.0,
+    },
+]
+
+EMPTY = []
+
+PARTIAL = [
+    {
+        "vram_utilization": 0.92,
+        "incoming_tokens": 200,
+        "memory_blocks": [
+            _block("system_prompt", 1.0),
+            _block("code_snippet", 0.9),
+            _block("user_query", 0.7),
+        ],
+        "oom_triggered": False,
+        "message": "start",
+        "done": False,
+        "reward": 0.0,
+    },
+    {
+        "vram_utilization": 0.55,
+        "incoming_tokens": 180,
+        "memory_blocks": [_block("system_prompt", 1.0), _block("user_query", 0.7)],
+        "oom_triggered": False,
+        "message": "partial progress",
+        "done": True,
+        "reward": 0.0,
+    },
+]
 
 
-def test_grader_medium_empty():
-    score = grader_medium([])
-    assert isinstance(score, float)
+def test_perfect_returns_one() -> None:
+    assert grader_medium(PERFECT) == 1.0
+
+
+def test_empty_returns_zero() -> None:
+    assert grader_medium(EMPTY) == 0.0
+
+
+def test_partial_between_zero_and_one() -> None:
+    score = grader_medium(PARTIAL)
+    assert 0.0 < score < 1.0
+
+
+def test_returns_float() -> None:
+    assert isinstance(grader_medium(PARTIAL), float)
+
+
+def test_deterministic() -> None:
+    assert grader_medium(PARTIAL) == grader_medium(PARTIAL)
+
+
+def test_clamped() -> None:
+    corrupted = [{"vram_utilization": 99.0, "oom_triggered": True, "memory_blocks": []}]
+    score = grader_medium(corrupted)
     assert 0.0 <= score <= 1.0
 
-
-def test_grader_medium_clamped():
-    obs = [_make_obs()]
-    score = grader_medium(obs)
-    assert 0.0 <= score <= 1.0
-
-
-def test_grader_medium_deterministic():
-    obs = [_make_obs()]
-    assert grader_medium(obs) == grader_medium(obs)
-
-
-def test_grader_medium_perfect():
-    score = grader_medium([_make_obs(vram=0.1)])
-    assert score >= 0.0
-
-
-def test_grader_medium_partial():
-    score = grader_medium([_make_obs(vram=0.9, oom=True)])
-    assert score >= 0.0

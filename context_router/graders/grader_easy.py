@@ -1,62 +1,46 @@
-from typing import List
+from typing import Any
 
-try:
-    from context_router.models import CacheObservation
-except ImportError:
-    from models import CacheObservation
 
 VRAM_TARGET = 0.5
 MAX_STEPS = 50
 
 
-def grader_easy(trajectory: List[CacheObservation]) -> float:
+def _get(obs: Any, key: str, default: Any) -> Any:
+    if isinstance(obs, dict):
+        return obs.get(key, default)
+    return getattr(obs, key, default)
+
+
+def grader_easy(trajectory: list[Any]) -> float:
     """
-    Evaluates the 'easy' task trajectory.
-    Goal: Reduce VRAM below 50% (0.5) within 50 steps without triggering OOM.
-
-    Scoring:
-    - VRAM efficiency (60%): How well VRAM is managed relative to target
-    - Survival (25%): Completing more steps is better
-    - No OOM bonus (15%): Not triggering OOM is critical
-
-    Partial credit: Available for partial VRAM improvement even if target not met.
+    Easy task:
+    - 1.0 if final VRAM < 0.5 with no OOM events.
+    - Partial credit for VRAM improvement and surviving more steps.
     """
     try:
         if not trajectory:
             return 0.0
 
+        first = trajectory[0]
+        final = trajectory[-1]
+
+        vram_initial = float(_get(first, "vram_utilization", 1.0))
+        vram_final = float(_get(final, "vram_utilization", 1.0))
+        oom_events = sum(1 for obs in trajectory if bool(_get(obs, "oom_triggered", False)))
         steps = len(trajectory)
 
-        first_obs = trajectory[0]
-        final_obs = trajectory[-1]
+        if vram_final < VRAM_TARGET and oom_events == 0:
+            return 1.0
 
-        vram_initial = first_obs.vram_utilization
-        vram_final = final_obs.vram_utilization
+        vram_drop = max(0.0, vram_initial - vram_final)
+        baseline = min(0.45, vram_drop / max(vram_initial, 1e-6) * 0.45)
+        survival = min(0.35, (steps / MAX_STEPS) * 0.35)
+        below_target_bonus = 0.20 if vram_final < VRAM_TARGET else 0.0
+        oom_penalty = min(0.6, 0.2 * oom_events)
 
-        oom_events = sum(1 for obs in trajectory if obs.oom_triggered)
-        oom_penalty = 0.2 * oom_events
-
-        if oom_events > 0:
-            survival_score = 0.0
-            vram_score = 0.0
-        else:
-            survival_score = min(1.0, steps / MAX_STEPS) * 0.25
-
-            if vram_final < VRAM_TARGET:
-                vram_score = (1.0 - (vram_final / VRAM_TARGET)) * 0.6
-            else:
-                vram_improvement = vram_initial - vram_final
-                vram_score = (
-                    max(0.0, vram_improvement / vram_initial * 0.3)
-                    if vram_initial > 0
-                    else 0.0
-                )
-
-        oom_bonus = 0.15 if oom_events == 0 else 0.0
-
-        score = vram_score + survival_score + oom_bonus - oom_penalty
-
+        score = baseline + survival + below_target_bonus - oom_penalty
         return float(max(0.0, min(1.0, score)))
 
     except Exception:
         return 0.0
+

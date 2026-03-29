@@ -1,85 +1,91 @@
-from typing import List
+from typing import Any
 
-try:
-    from context_router.models import CacheObservation
-except ImportError:
-    from models import CacheObservation
 
 VRAM_TARGET = 0.3
 MAX_STEPS = 50
-CRITICAL_BLOCK_TYPES = frozenset({"system_prompt", "code_snippet"})
+CRITICAL_TYPES = frozenset({"system_prompt", "code_snippet"})
 
 
-def grader_hard(trajectory: List[CacheObservation]) -> float:
+def _get(obs: Any, key: str, default: Any) -> Any:
+    if isinstance(obs, dict):
+        return obs.get(key, default)
+    return getattr(obs, key, default)
+
+
+def _blocks(obs: Any) -> list[Any]:
+    value = _get(obs, "memory_blocks", [])
+    if isinstance(value, list):
+        return value
+    return []
+
+
+def _block_get(block: Any, key: str, default: Any) -> Any:
+    if isinstance(block, dict):
+        return block.get(key, default)
+    return getattr(block, key, default)
+
+
+def grader_hard(trajectory: list[Any]) -> float:
     """
-    Evaluates the 'hard' task trajectory.
-    Goal: Optimize VRAM under high token pressure and RAG spikes.
-
-    Scoring:
-    - Survival (35%): Primary goal - just surviving is hard
-    - Critical block retention (30%): Keep system_prompt and code_snippet
-    - VRAM efficiency (25%): Keep VRAM low on average
-    - Stability (10%): Consistent VRAM management
-
-    Partial credit: Available for partial survival and partial improvements.
+    Hard task:
+    - 1.0 for full survival with strong critical retention and low average VRAM.
+    - Partial credit from survival, retention, VRAM control, and stability.
     """
     try:
         if not trajectory:
             return 0.0
 
+        first = trajectory[0]
+        final = trajectory[-1]
         steps = len(trajectory)
 
-        first_obs = trajectory[0]
-        final_obs = trajectory[-1]
+        oom_events = sum(1 for obs in trajectory if bool(_get(obs, "oom_triggered", False)))
+        vram_values = [float(_get(obs, "vram_utilization", 1.0)) for obs in trajectory]
+        avg_vram = sum(vram_values) / max(1, len(vram_values))
 
-        oom_events = sum(1 for obs in trajectory if obs.oom_triggered)
-        oom_penalty = 0.3 * oom_events
+        initial_blocks = _blocks(first)
+        final_blocks = _blocks(final)
+        initial_critical = {
+            _block_get(b, "block_type", "") for b in initial_blocks if _block_get(b, "block_type", "") in CRITICAL_TYPES
+        }
+        final_critical = {
+            _block_get(b, "block_type", "") for b in final_blocks if _block_get(b, "block_type", "") in CRITICAL_TYPES
+        }
 
-        if oom_events > 0:
-            survival_score = 0.0
-            vram_score = 0.0
-            retention_score = 0.0
-            stability_score = 0.0
+        if initial_critical:
+            retention_ratio = len(final_critical) / len(initial_critical)
         else:
-            survival_score = (steps / MAX_STEPS) * 0.35
+            retention_ratio = 1.0
 
-            avg_vram = sum(obs.vram_utilization for obs in trajectory) / steps
-            if avg_vram < VRAM_TARGET:
-                vram_score = (1.0 - (avg_vram / VRAM_TARGET)) * 0.25
-            else:
-                vram_score = max(0.0, (1.0 - avg_vram) * 0.15)
+        if (
+            oom_events == 0
+            and steps >= MAX_STEPS
+            and avg_vram < VRAM_TARGET
+            and retention_ratio >= 0.8
+        ):
+            return 1.0
 
-            first_types = {b.block_type for b in first_obs.memory_blocks}
-            final_types = {b.block_type for b in final_obs.memory_blocks}
+        survival_component = min(0.35, (steps / MAX_STEPS) * 0.35)
+        retention_component = min(0.30, retention_ratio * 0.30)
+        vram_component = max(0.0, min(0.25, (1.0 - avg_vram) * 0.25))
 
-            critical_initial = first_types & CRITICAL_BLOCK_TYPES
-            critical_final = final_types & CRITICAL_BLOCK_TYPES
+        if len(vram_values) > 1:
+            stability = max(0.0, 1.0 - (max(vram_values) - min(vram_values)))
+            stability_component = min(0.10, stability * 0.10)
+        else:
+            stability_component = 0.0
 
-            if len(critical_initial) > 0:
-                retention_ratio = len(critical_final) / len(critical_initial)
-            else:
-                retention_ratio = 1.0 if len(critical_final) > 0 else 0.0
-
-            retention_score = retention_ratio * 0.30
-
-            vram_values = [obs.vram_utilization for obs in trajectory]
-            if len(vram_values) > 1:
-                max_vram = max(vram_values)
-                min_vram = min(vram_values)
-                stability = 1.0 - (max_vram - min_vram)
-                stability_score = stability * 0.10
-            else:
-                stability_score = 0.10
+        oom_penalty = min(0.8, 0.30 * oom_events)
 
         score = (
-            survival_score
-            + retention_score
-            + vram_score
-            + stability_score
+            survival_component
+            + retention_component
+            + vram_component
+            + stability_component
             - oom_penalty
         )
-
         return float(max(0.0, min(1.0, score)))
 
     except Exception:
         return 0.0
+

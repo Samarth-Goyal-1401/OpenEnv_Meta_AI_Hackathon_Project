@@ -1,92 +1,85 @@
-from typing import List
+from typing import Any
 
-try:
-    from context_router.models import CacheObservation
-except ImportError:
-    from models import CacheObservation
 
 VRAM_TARGET = 0.4
 MAX_STEPS = 50
 HIGH_ATTENTION_THRESHOLD = 0.6
 
 
-def grader_medium(trajectory: List[CacheObservation]) -> float:
+def _get(obs: Any, key: str, default: Any) -> Any:
+    if isinstance(obs, dict):
+        return obs.get(key, default)
+    return getattr(obs, key, default)
+
+
+def _blocks(obs: Any) -> list[Any]:
+    value = _get(obs, "memory_blocks", [])
+    if isinstance(value, list):
+        return value
+    return []
+
+
+def _block_get(block: Any, key: str, default: Any) -> Any:
+    if isinstance(block, dict):
+        return block.get(key, default)
+    return getattr(block, key, default)
+
+
+def grader_medium(trajectory: list[Any]) -> float:
     """
-    Evaluates the 'medium' task trajectory.
-    Goal: Reduce VRAM below 40% (0.4) while keeping high-attention blocks.
-
-    Scoring:
-    - VRAM efficiency (45%): Target < 0.4 with partial credit for improvement
-    - Attention retention (35%): Keep system_prompt and high-attention blocks
-    - Survival (20%): Complete more steps
-
-    Partial credit: Available for partial VRAM reduction and partial attention retention.
+    Medium task:
+    - 1.0 if target VRAM is met, no OOM, system prompt retained, and most
+      high-attention blocks are retained.
+    - Partial credit combines VRAM progress, retention, and survival.
     """
     try:
         if not trajectory:
             return 0.0
 
+        first = trajectory[0]
+        final = trajectory[-1]
+
+        vram_initial = float(_get(first, "vram_utilization", 1.0))
+        vram_final = float(_get(final, "vram_utilization", 1.0))
+        oom_events = sum(1 for obs in trajectory if bool(_get(obs, "oom_triggered", False)))
         steps = len(trajectory)
 
-        first_obs = trajectory[0]
-        final_obs = trajectory[-1]
+        initial_blocks = _blocks(first)
+        final_blocks = _blocks(final)
 
-        vram_initial = first_obs.vram_utilization
-        vram_final = final_obs.vram_utilization
+        initial_high = [
+            b for b in initial_blocks if float(_block_get(b, "attention_score", 0.0)) >= HIGH_ATTENTION_THRESHOLD
+        ]
+        final_high = [
+            b for b in final_blocks if float(_block_get(b, "attention_score", 0.0)) >= HIGH_ATTENTION_THRESHOLD
+        ]
 
-        oom_events = sum(1 for obs in trajectory if obs.oom_triggered)
-        oom_penalty = 0.25 * oom_events
-
-        if oom_events > 0:
-            survival_score = 0.0
-            vram_score = 0.0
-            attention_score = 0.0
+        initial_high_count = len(initial_high)
+        if initial_high_count > 0:
+            retention_ratio = min(1.0, len(final_high) / initial_high_count)
         else:
-            survival_score = min(1.0, steps / MAX_STEPS) * 0.20
+            retention_ratio = 1.0
 
-            if vram_final < VRAM_TARGET:
-                vram_score = (1.0 - (vram_final / VRAM_TARGET)) * 0.45
-            else:
-                vram_improvement = vram_initial - vram_final
-                vram_score = (
-                    max(0.0, vram_improvement / vram_initial * 0.25)
-                    if vram_initial > 0
-                    else 0.0
-                )
+        system_kept = any(_block_get(b, "block_type", "") == "system_prompt" for b in final_blocks)
 
-            system_kept = any(
-                b.block_type == "system_prompt" for b in final_obs.memory_blocks
-            )
+        if (
+            vram_final < VRAM_TARGET
+            and oom_events == 0
+            and system_kept
+            and retention_ratio >= 0.8
+        ):
+            return 1.0
 
-            high_attn_blocks = [
-                b
-                for b in final_obs.memory_blocks
-                if b.attention_score >= HIGH_ATTENTION_THRESHOLD
-            ]
-            high_attn_count = len(high_attn_blocks)
+        vram_drop = max(0.0, vram_initial - vram_final)
+        vram_component = min(0.40, vram_drop / max(vram_initial, 1e-6) * 0.40)
+        retention_component = (0.25 if system_kept else 0.0) + (retention_ratio * 0.20)
+        survival_component = min(0.15, (steps / MAX_STEPS) * 0.15)
+        target_bonus = 0.10 if vram_final < VRAM_TARGET else 0.0
+        oom_penalty = min(0.6, 0.25 * oom_events)
 
-            initial_high_attn = [
-                b
-                for b in first_obs.memory_blocks
-                if b.attention_score >= HIGH_ATTENTION_THRESHOLD
-            ]
-            initial_high_attn_count = len(initial_high_attn)
-
-            if initial_high_attn_count > 0:
-                attn_retention_ratio = min(
-                    1.0, high_attn_count / initial_high_attn_count
-                )
-            else:
-                attn_retention_ratio = 1.0 if high_attn_count > 0 else 0.0
-
-            attention_score = (0.5 if system_kept else 0.0) + (
-                attn_retention_ratio * 0.5
-            )
-            attention_score = attention_score * 0.35
-
-        score = vram_score + attention_score + survival_score - oom_penalty
-
+        score = vram_component + retention_component + survival_component + target_bonus - oom_penalty
         return float(max(0.0, min(1.0, score)))
 
     except Exception:
         return 0.0
+

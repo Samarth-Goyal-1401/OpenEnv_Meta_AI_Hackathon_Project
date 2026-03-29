@@ -1,163 +1,149 @@
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-# All rights reserved.
-#
-# This source code is licensed under the BSD-style license found in the
-# LICENSE file in the root directory of this source tree.
+import logging
+import random
+from typing import Any
 
-"""
-FastAPI application for the Context Router Environment.
+from openenv.core.env_server import create_app
+from pydantic import BaseModel, Field
 
-This module creates an HTTP server that exposes the ContextRouterEnvironment
-over HTTP and WebSocket endpoints, compatible with EnvClient.
+from ..graders.grader_easy import grader_easy
+from ..graders.grader_hard import grader_hard
+from ..graders.grader_medium import grader_medium
+from ..models import CacheAction, CacheObservation, EvictionTactic
+from .context_env import ContextRouterEnv
+from ..tasks.task_definitions import TASKS
 
-Endpoints:
-    - POST /reset: Reset the environment
-    - POST /step: Execute an action
-    - GET /state: Get current environment state
-    - GET /schema: Get action/observation schemas
-    - WS /ws: WebSocket endpoint for persistent sessions
-
-Usage:
-    # Development (with auto-reload):
-    uvicorn server.app:app --reload --host 0.0.0.0 --port 8000
-
-    # Production:
-    uvicorn server.app:app --host 0.0.0.0 --port 8000 --workers 4
-
-    # Or run directly:
-    python -m server.app
-"""
-
-try:
-    from openenv.core.env_server.http_server import create_app
-except Exception as e:  # pragma: no cover
-    raise ImportError(
-        "openenv is required for the web interface. Install dependencies with '\n    uv sync\n'"
-    ) from e
-
-try:
-    from ..models import CacheAction, CacheObservation
-    from .context_env import ContextRouterEnv
-except (ModuleNotFoundError, ImportError):
-    from models import CacheAction, CacheObservation
-    from server.context_env import ContextRouterEnv
+logger = logging.getLogger(__name__)
 
 
-# RULE: Pass the CLASS, never an instance (each WebSocket connection gets its own instance).
-# RULE: Use create_app() — create_fastapi_app() does NOT exist.
-app = create_app(
-    ContextRouterEnv,       # CLASS, not ContextRouterEnv()
-    CacheAction,
-    CacheObservation,
-    env_name="context_router",
-    max_concurrent_envs=1,
-)
+# RULEBOOK PB1: pass the environment class, never an instance.
+app = create_app(ContextRouterEnv, CacheAction, CacheObservation, env_name="context_router")
 
-from typing import List
-from pydantic import BaseModel
 
 class GraderRequest(BaseModel):
-    task_id: str
-    trajectory: List[CacheObservation]
+    task_id: str = Field(..., description="Task id: easy | medium | hard")
+    trajectory: list[Any] = Field(default_factory=list)
+
+
+@app.get("/health")
+def health() -> dict[str, str]:
+    return {"status": "ok"}
+
 
 @app.get("/tasks")
-def get_tasks():
-    from context_router.tasks.task_definitions import TASKS
-    return [task.model_dump() for task in TASKS]
+def get_tasks() -> dict[str, list[dict[str, Any]]]:
+    return {"tasks": list(TASKS.values())}
+
+
+def _to_observation(item: Any) -> CacheObservation:
+    if isinstance(item, CacheObservation):
+        return item
+    if isinstance(item, dict):
+        return CacheObservation(
+            vram_utilization=float(item.get("vram_utilization", 1.0)),
+            incoming_tokens=int(item.get("incoming_tokens", 0)),
+            memory_blocks=item.get("memory_blocks", []),
+            oom_triggered=bool(item.get("oom_triggered", False)),
+            message=str(item.get("message", "")),
+            done=bool(item.get("done", False)),
+            reward=float(item.get("reward", 0.0)),
+        )
+    raise TypeError(f"Unsupported trajectory element type: {type(item)}")
+
 
 @app.post("/grader")
-def run_grader(req: GraderRequest):
-    from context_router.graders.grader_easy import grader_easy
-    from context_router.graders.grader_medium import grader_medium
-    from context_router.graders.grader_hard import grader_hard
-    
-    score = 0.0
-    if req.task_id == "easy":
-        score = grader_easy(req.trajectory)
-    elif req.task_id == "medium":
-        score = grader_medium(req.trajectory)
-    elif req.task_id == "hard":
-        score = grader_hard(req.trajectory)
-        
-    return {"score": max(0.0, min(1.0, float(score)))}
+def grader_endpoint(req: GraderRequest) -> dict[str, float]:
+    graders = {"easy": grader_easy, "medium": grader_medium, "hard": grader_hard}
+    grader_fn = graders.get(req.task_id, grader_easy)
+    try:
+        trajectory = [_to_observation(item) for item in req.trajectory]
+        score = grader_fn(trajectory)
+        return {"score": float(max(0.0, min(1.0, score)))}
+    except Exception as e:
+        logger.error("/grader failed for task '%s': %s", req.task_id, e, exc_info=True)
+        return {"score": 0.0}
+
 
 @app.post("/baseline")
-def run_baseline_endpoint():
-    """
-    Runs a real baseline episode (random actions) for all 3 tasks
-    and returns their final grader scores.
-    """
-    results = {}
-    from .context_env import ContextRouterEnv
-    from ..models import CacheAction, EvictionTactic
-    import random
-    
+def baseline_endpoint() -> dict[str, float]:
+    results: dict[str, float] = {}
     for task_name in ["easy", "medium", "hard"]:
         try:
-            env = ContextRouterEnv()
-            env.set_task(task_name)
-            env.reset(seed=42)
-            trajectory = []
-            
-            # Run 10 steps with random but valid actions
-            rng = random.Random(42)
-            for _ in range(10):
-                # Only target blocks that actually exist
-                if not env._blocks:
-                    break
-                target = rng.choice(list(env._blocks.keys()))
-                tactic = rng.choice([EvictionTactic.EVICT, EvictionTactic.RETAIN])
-                if task_name != "easy":
-                    tactic = rng.choice([EvictionTactic.EVICT, EvictionTactic.RETAIN, EvictionTactic.COMPRESS])
-                
-                obs = env.step(CacheAction(target_block_id=target, tactic=tactic))
-                trajectory.append(obs)
-                if obs.done:
-                    break
-            
-            from ..graders.grader_easy import grader_easy
-            from ..graders.grader_medium import grader_medium
-            from ..graders.grader_hard import grader_hard
-            
-            grader_fn = {"easy": grader_easy, "medium": grader_medium, "hard": grader_hard}[task_name]
-            results[task_name] = float(grader_fn(trajectory))
+            results[task_name] = float(_run_baseline_episode(task_name))
         except Exception as e:
-            logger.error(f"Baseline for {task_name} failed: {e}")
+            logger.error("Baseline failed for task '%s': %s", task_name, e, exc_info=True)
             results[task_name] = 0.0
-            
     return results
 
 
-def main(host: str = "0.0.0.0", port: int = 8000):
-    """
-    Entry point for direct execution via uv run or python -m.
+def _run_baseline_episode(task_name: str) -> float:
+    env = ContextRouterEnv()
+    env.set_task(task_name)
+    env.reset(seed=42)
 
-    This function enables running the server without Docker:
-        uv run --project . server
-        uv run --project . server --port 8001
-        python -m context_router.server.app
+    rng = random.Random(42)
+    trajectory: list[CacheObservation] = []
 
-    Args:
-        host: Host address to bind to (default: "0.0.0.0")
-        port: Port number to listen on (default: 8000)
+    for _ in range(10):
+        if not env._blocks:
+            break
 
-    For production deployments, consider using uvicorn directly with
-    multiple workers:
-        uvicorn context_router.server.app:app --workers 4
-    """
+        target_block_id = rng.choice(list(env._blocks.keys()))
+        if task_name == "easy":
+            tactic = rng.choice([EvictionTactic.EVICT, EvictionTactic.RETAIN])
+        else:
+            tactic = rng.choice(
+                [EvictionTactic.EVICT, EvictionTactic.RETAIN, EvictionTactic.COMPRESS]
+            )
+        priority = None
+        if task_name == "hard":
+            block = env._blocks[target_block_id]
+            priority = _hard_priority_from_block(block)
+
+        obs = env.step(
+            CacheAction(
+                target_block_id=target_block_id,
+                tactic=tactic,
+                priority=priority,
+            )
+        )
+        trajectory.append(obs)
+        if obs.done:
+            break
+
+    grader_fn = {"easy": grader_easy, "medium": grader_medium, "hard": grader_hard}[task_name]
+    return grader_fn(trajectory)
+
+
+def _hard_priority_from_block(block: Any) -> int:
+    score = 3
+    block_type = getattr(block, "block_type", "")
+    attention = float(getattr(block, "attention_score", 0.0))
+    age = int(getattr(block, "age", 0))
+    token_count = int(getattr(block, "token_count", 0))
+
+    if block_type in {"system_prompt", "code_snippet"}:
+        score += 1
+    if attention >= 0.75:
+        score += 1
+    elif attention <= 0.25:
+        score -= 1
+    if age <= 2:
+        score += 1
+    elif age >= 12:
+        score -= 1
+    if token_count >= 700:
+        score += 1
+    elif token_count <= 150:
+        score -= 1
+    return max(1, min(5, score))
+
+
+def main() -> None:
     import uvicorn
 
-    uvicorn.run(app, host=host, port=port)
+    uvicorn.run(app, host="0.0.0.0", port=8000)
 
 
 if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--port", type=int, default=8000)
-    args = parser.parse_args()
-    # openenv validate requires the literal string "main()" to be present
-    if args.port == 8000:
-        main()
-    else:
-        main(port=args.port)
+    # openenv validate expects this callable symbol.
+    main()

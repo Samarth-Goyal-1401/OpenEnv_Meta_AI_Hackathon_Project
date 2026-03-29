@@ -39,6 +39,11 @@ action_schema:
       type: string
       enum: ["evict", "retain", "compress"]
       description: "Eviction tactic to apply"
+    priority:
+      type: integer
+      minimum: 1
+      maximum: 5
+      description: "Optional hard-task priority signal (1=lowest importance, 5=highest)"
 
 observation_schema:
   type: object

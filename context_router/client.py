@@ -22,10 +22,13 @@ class MyEnv(EnvClient[CacheAction, CacheObservation, State]):
 
     def _step_payload(self, action: CacheAction) -> dict:
         """Convert a CacheAction to a dict for the HTTP/WebSocket request."""
-        return {
+        payload = {
             "target_block_id": action.target_block_id,
             "tactic": action.tactic.value,
         }
+        if action.priority is not None:
+            payload["priority"] = action.priority
+        return payload
 
     def _parse_result(self, payload: dict) -> StepResult[CacheObservation]:
         """Convert the HTTP/WebSocket response to a CacheObservation."""

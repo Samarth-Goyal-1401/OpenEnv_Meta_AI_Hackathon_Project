@@ -193,7 +193,10 @@ class ContextRouterEnv(Environment):
 
             # ── 1) Execute tactic ──
             block = self._blocks[action.target_block_id]
+            priority_msg = self._apply_priority_signal(action, block)
             msg = self._execute_tactic(action, block)
+            if priority_msg:
+                msg += f" | {priority_msg}"
 
             # ── 2) Attention decay ──
             self._apply_attention_decay()
@@ -279,6 +282,67 @@ class ContextRouterEnv(Environment):
 
         # RETAIN
         return f"Retained block {bid} ({block.block_type})"
+
+    def _apply_priority_signal(self, action: CacheAction, block: MemoryBlockInfo) -> str:
+        """
+        Hard-task-only signal:
+        - aligned priority: no extra pressure
+        - misaligned/missing priority: injects extra spill tokens
+        This makes `priority` materially affect trajectories.
+        """
+        if self._current_task != "hard":
+            return ""
+
+        expected = self._expected_priority(block)
+        if action.priority is None:
+            spill = 160
+            self._inject_priority_spill(spill)
+            return (
+                f"Hard priority missing (expected around {expected}). "
+                f"Spill +{spill} tokens"
+            )
+
+        delta = abs(action.priority - expected)
+        if delta <= 1:
+            return f"Hard priority aligned ({action.priority} vs expected {expected})"
+
+        spill = 80 if delta == 2 else 160
+        self._inject_priority_spill(spill)
+        return (
+            f"Hard priority mismatch ({action.priority} vs expected {expected}). "
+            f"Spill +{spill} tokens"
+        )
+
+    def _expected_priority(self, block: MemoryBlockInfo) -> int:
+        score = 3
+        if block.block_type in self.CRITICAL_TYPES:
+            score += 1
+        if block.attention_score >= 0.75:
+            score += 1
+        elif block.attention_score <= 0.25:
+            score -= 1
+        if block.age <= 2:
+            score += 1
+        elif block.age >= 12:
+            score -= 1
+        if block.token_count >= 700:
+            score += 1
+        elif block.token_count <= 150:
+            score -= 1
+        return max(1, min(5, score))
+
+    def _inject_priority_spill(self, tokens: int) -> None:
+        if tokens <= 0:
+            return
+        spill_block = MemoryBlockInfo(
+            block_id=self._next_block_id,
+            block_type="priority_spill",
+            attention_score=0.15,
+            token_count=tokens,
+            age=0,
+        )
+        self._blocks[self._next_block_id] = spill_block
+        self._next_block_id += 1
 
     def _apply_attention_decay(self) -> None:
         updated: dict[int, MemoryBlockInfo] = {}
