@@ -823,3 +823,29 @@ python baseline/run_baseline.py --base-url https://<your-space>.hf.space
 ### Suggested fix for next pass
 - In Dockerfile install `curl` before uv install step (or install uv without curl dependency).
 - Re-run `openenv build`, then continue Step 3.4 checks.
+
+## Session 13 - March 29, 2026 - Dev 1 (Shreyas) Gate 2 Local Completion
+
+### What was fixed
+1. `context_router/server/Dockerfile`
+   - Installed `curl` in builder stage (needed for uv installer script).
+   - Installed `curl` in runtime stage (needed by HEALTHCHECK command).
+
+2. `context_router/server/app.py`
+   - Added import fallback block so app works both as package-style imports and top-level module imports in container runtime.
+
+### Validation outcomes
+- `docker pull python:3.11-slim` succeeded (hotspot network).
+- `openenv build` completed image build; tool prints ended with a Windows encoding issue (`\u2713`) but image was produced.
+- Local container checks passed:
+  - `/health` reachable
+  - `/tasks` returns 3 tasks
+  - `/reset` returns valid observation payload
+  - `/grader` returns float score
+  - `/baseline` returns easy/medium/hard scores
+- `python baseline/run_baseline.py --base-url http://localhost:8000` exits 0 with 3 scores.
+- `openenv validate --verbose` passes.
+
+### Remaining scope
+- HF deploy checks (Step 3.5/3.6) still pending for final Gate 2 closure.
+- `main` not touched; changes remain on `dev1/env-core`.

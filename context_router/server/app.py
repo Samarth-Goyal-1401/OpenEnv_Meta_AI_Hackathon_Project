@@ -5,12 +5,20 @@ from typing import Any
 from openenv.core.env_server import create_app
 from pydantic import BaseModel, Field
 
-from ..graders.grader_easy import grader_easy
-from ..graders.grader_hard import grader_hard
-from ..graders.grader_medium import grader_medium
-from ..models import CacheAction, CacheObservation, EvictionTactic
-from .context_env import ContextRouterEnv
-from ..tasks.task_definitions import TASKS
+try:
+    from ..graders.grader_easy import grader_easy
+    from ..graders.grader_hard import grader_hard
+    from ..graders.grader_medium import grader_medium
+    from ..models import CacheAction, CacheObservation, EvictionTactic
+    from .context_env import ContextRouterEnv
+    from ..tasks.task_definitions import TASKS
+except (ImportError, ValueError):
+    from graders.grader_easy import grader_easy
+    from graders.grader_hard import grader_hard
+    from graders.grader_medium import grader_medium
+    from models import CacheAction, CacheObservation, EvictionTactic
+    from server.context_env import ContextRouterEnv
+    from tasks.task_definitions import TASKS
 
 logger = logging.getLogger(__name__)
 

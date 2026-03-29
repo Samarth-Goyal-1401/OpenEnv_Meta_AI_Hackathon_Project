@@ -15,9 +15,11 @@ FROM ${BASE_IMAGE} AS builder
 
 WORKDIR /app
 
-# Ensure git is available (required for installing dependencies from VCS)
+# Ensure git/curl are available:
+# - git: required for dependencies from VCS
+# - curl: required for uv installer in builder stage
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends git && \
+    apt-get install -y --no-install-recommends git curl && \
     rm -rf /var/lib/apt/lists/*
 
 # Build argument to control whether we're building standalone or in-repo
@@ -58,6 +60,11 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 FROM ${BASE_IMAGE}
 
 WORKDIR /app
+
+# Healthcheck uses curl in runtime image.
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends curl && \
+    rm -rf /var/lib/apt/lists/*
 
 # Copy the virtual environment from builder
 COPY --from=builder /app/env/.venv /app/.venv
