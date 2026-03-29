@@ -14,7 +14,7 @@ except ImportError:
     from context_router.client import MyEnv
     from context_router.models import CacheAction, EvictionTactic, CacheObservation
 
-BASE_URL = "http://localhost:8000"
+# BASE_URL is now provided via command-line arguments (--base-url)
 
 async def wait_for_server(url: str, max_retries: int = 5, delay: int = 2):
     """Wait for the FastAPI server to boot up and respond."""
@@ -33,7 +33,7 @@ async def wait_for_server(url: str, max_retries: int = 5, delay: int = 2):
     print("Error: Server did not respond. Exiting.")
     sys.exit(1)
 
-async def run_task(task_id: str, env: MyEnv) -> float:
+async def run_task(task_id: str, env: MyEnv, base_url: str) -> float:
     """Run one episode of the environment as a naive baseline agent."""
     print(f"\n--- Running baseline for task: {task_id} ---")
     try:
@@ -67,7 +67,7 @@ async def run_task(task_id: str, env: MyEnv) -> float:
         
         # Submit trajectory to grader
         async with httpx.AsyncClient() as client:
-            r = await client.post(f"{BASE_URL}/grader", json={"task_id": task_id, "trajectory": trajectory})
+            r = await client.post(f"{base_url}/grader", json={"task_id": task_id, "trajectory": trajectory})
             r.raise_for_status()
             score = r.json().get("score", 0.0)
             
@@ -82,16 +82,25 @@ async def run_task(task_id: str, env: MyEnv) -> float:
         sys.exit(1)
 
 async def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="Run baseline evaluation for Context Router.")
+    parser.add_argument("--base-url", required=True, help="Base URL of the environment server (e.g., http://localhost:8000)")
+    args = parser.parse_args()
+    
+    base_url = args.base_url
+    if base_url.endswith("/"):
+        base_url = base_url[:-1]
+
     # 1. Wait for server
-    await wait_for_server(BASE_URL)
+    await wait_for_server(base_url)
     
     # Initialize a single client connection to respect max_concurrent_envs=1
-    env = MyEnv(BASE_URL)
+    env = MyEnv(base_url)
     
     # 2. Run Baseline on all 3 tasks
     scores = {}
     for task_id in ["easy", "medium", "hard"]:
-        scores[task_id] = await run_task(task_id, env)
+        scores[task_id] = await run_task(task_id, env, base_url)
         
     print("\n==============================")
     print("FINAL BASELINE EVALUATION SCORES")

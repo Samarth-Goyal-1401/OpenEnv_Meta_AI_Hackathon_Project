@@ -83,7 +83,49 @@ def run_grader(req: GraderRequest):
 
 @app.post("/baseline")
 def run_baseline_endpoint():
-    return {"easy": 0.5, "medium": 0.5, "hard": 0.5}
+    """
+    Runs a real baseline episode (random actions) for all 3 tasks
+    and returns their final grader scores.
+    """
+    results = {}
+    from .context_env import ContextRouterEnv
+    from ..models import CacheAction, EvictionTactic
+    import random
+    
+    for task_name in ["easy", "medium", "hard"]:
+        try:
+            env = ContextRouterEnv()
+            env.set_task(task_name)
+            env.reset(seed=42)
+            trajectory = []
+            
+            # Run 10 steps with random but valid actions
+            rng = random.Random(42)
+            for _ in range(10):
+                # Only target blocks that actually exist
+                if not env._blocks:
+                    break
+                target = rng.choice(list(env._blocks.keys()))
+                tactic = rng.choice([EvictionTactic.EVICT, EvictionTactic.RETAIN])
+                if task_name != "easy":
+                    tactic = rng.choice([EvictionTactic.EVICT, EvictionTactic.RETAIN, EvictionTactic.COMPRESS])
+                
+                obs = env.step(CacheAction(target_block_id=target, tactic=tactic))
+                trajectory.append(obs)
+                if obs.done:
+                    break
+            
+            from ..graders.grader_easy import grader_easy
+            from ..graders.grader_medium import grader_medium
+            from ..graders.grader_hard import grader_hard
+            
+            grader_fn = {"easy": grader_easy, "medium": grader_medium, "hard": grader_hard}[task_name]
+            results[task_name] = float(grader_fn(trajectory))
+        except Exception as e:
+            logger.error(f"Baseline for {task_name} failed: {e}")
+            results[task_name] = 0.0
+            
+    return results
 
 
 def main(host: str = "0.0.0.0", port: int = 8000):
