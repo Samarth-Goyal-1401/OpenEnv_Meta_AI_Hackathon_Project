@@ -849,3 +849,39 @@ python baseline/run_baseline.py --base-url https://<your-space>.hf.space
 ### Remaining scope
 - HF deploy checks (Step 3.5/3.6) still pending for final Gate 2 closure.
 - `main` not touched; changes remain on `dev1/env-core`.
+
+## Session 14 - March 30, 2026 - Dev 2 (Samarth) Phase 3 Polish + Reliability
+
+### What was attempted
+- Run Phase 3 polish checks locally (verification script, baseline runner, `openenv validate`).
+- Confirm endpoints + baseline behavior are reliable on Windows PowerShell.
+
+### What broke (MISTAKE LOG)
+1. **Windows console encoding crash in verification script**
+   - `tests/verify_implementation.py` printed non-ASCII symbols (checkmarks) and crashed on some Windows shells.
+   - Error: `UnicodeEncodeError: 'charmap' codec can't encode character '\u2713'`.
+
+2. **Baseline runner silently returned all-zero scores**
+   - `context_router/baseline/run_baseline.py` would sometimes print `0.0000` for all tasks against a healthy local server.
+   - Root cause: `httpx` inheriting proxy settings from environment; localhost calls could fail, and the script swallowed exceptions.
+
+3. **/grader smoke test false-negative**
+   - `curl -X POST /grader` without JSON body returns 422 (by design), which can look like a broken endpoint during smoke checks.
+   - On Windows PowerShell, quoting JSON for `curl.exe -d '{...}'` can also produce invalid JSON.
+
+### What fixed it (RESOLUTION)
+1. **Made verification script ASCII-only**
+   - Rewrote `tests/verify_implementation.py` output markers to `[OK]` / `[FAIL]` to avoid encoding crashes.
+
+2. **Hardened baseline runner networking**
+   - Updated `httpx.AsyncClient(..., trust_env=False)` to ignore proxy env vars.
+   - Preferred server-side `/baseline` endpoint first (canonical evaluation), with fallback to client rollout if unavailable.
+
+3. **Correct grader smoke payload**
+   - Use PowerShell `Invoke-RestMethod` (or curl with correct quoting) to POST JSON:
+     - Body must include `task_id` and `trajectory` (can be empty).
+
+### Validation outcomes
+- `pytest context_router/tests`: PASS (18 tests).
+- `openenv validate --verbose`: PASS.
+- Local baseline run (uvicorn + `run_baseline.py`): exits 0 and returns non-zero scores once proxy env is ignored.
