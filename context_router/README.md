@@ -1,3 +1,14 @@
+---
+title: Context Router Environment
+colorFrom: blue
+colorTo: green
+sdk: docker
+app_port: 8000
+pinned: false
+tags:
+  - openenv
+---
+
 # Edge GPU Context Router - OpenEnv Environment
 
 ## Overview
