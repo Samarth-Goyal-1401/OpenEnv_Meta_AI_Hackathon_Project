@@ -1,0 +1,10 @@
+# Team requirements for Edge GPU Context Router
+openenv-core[core]>=0.2.2
+fastapi>=0.115.0
+uvicorn>=0.30.0
+pydantic>=2.0.0
+pyyaml>=6.0.0
+requests>=2.31.0
+python-dotenv>=1.0.0
+typing-extensions>=4.8.0
+# Note: Rulebook S3 prefers pyproject.toml and 'uv sync'

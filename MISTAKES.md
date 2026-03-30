@@ -923,3 +923,100 @@ python baseline/run_baseline.py --base-url https://<your-space>.hf.space
  - `pytest context_router/tests`: PASS (18 tests).
  - `openenv validate --verbose`: PASS.
  - Local baseline run (uvicorn + `run_baseline.py`): exits 0 and returns non-zero scores once proxy env is ignored.
+### Validation outcomes
+- `pytest context_router/tests`: PASS (18 tests).
+- `openenv validate --verbose`: PASS.
+- Local baseline run (uvicorn + `run_baseline.py`): exits 0 and returns non-zero scores once proxy env is ignored.
+
+## Session 15 - March 30, 2026 - Dev 2 (Samarth) HF Spaces Deployment Closure (Gate 2 Complete)
+
+### Goal
+- Deploy Dockerized environment to Hugging Face Spaces and pass live verification:
+  - `/health` -> 200
+  - `POST /reset` -> 200 + JSON
+  - `python hf_deployment/baseline/run_baseline.py --base-url <HF_URL>` -> prints 3 scores
+  - `openenv validate --verbose --url <HF_URL>` -> PASS (6/6)
+
+### What was attempted
+- Use a dedicated HF deployment folder (`hf_deployment/`) rather than `context_router/` to avoid relying on `openenv-base:latest` in HF.
+- Build and smoke-test locally with Docker, then upload the folder contents to a Docker Space via `huggingface_hub`.
+
+### What broke (MISTAKE LOG)
+1. **Docker build failed: missing Dockerfile in `hf_deployment/`**
+   - Symptom: `failed to read dockerfile: open Dockerfile: no such file or directory`
+   - Root cause: `hf_deployment/Dockerfile` (and related files) were missing from the folder at the time of build.
+
+2. **Docker build failed: `uv sync --frozen` without a lockfile**
+   - Symptom: `Unable to find lockfile at uv.lock, but --frozen was provided`
+   - Root cause: Dockerfile assumed `uv.lock` always exists; in some states it was missing.
+
+3. **Local container "Empty reply from server" during cold start**
+   - Symptom: `curl: (52) Empty reply from server` right after container start.
+   - Root cause: app still booting; requests hit before uvicorn was ready.
+   - Fix: poll `/health` with retries until 200 before calling other endpoints.
+
+4. **HF push script missing + later HF auth failures**
+   - `push_to_hf.py` not present in repo root during deploy run (file not found).
+   - After recreating script, first push attempt returned `401 Unauthorized` because:
+     - `HF_TOKEN` env var contained a placeholder/short value (length 6), not a real token.
+     - `huggingface-cli` was not available; needed to use the `hf` CLI.
+   - Additional friction: `hf auth logout` complained until both env vars were cleared:
+     - `HF_TOKEN`
+     - `HUGGING_FACE_HUB_TOKEN`
+
+5. **HF build error due wrong Space/Dockerfile (duplicate spaces)**
+   - Symptom (HF logs): `docker.io/library/openenv-base:latest: not found`
+   - Root cause: two Spaces existed with confusingly similar names; the failing one was building a Dockerfile that referenced `openenv-base:latest` (not available publicly).
+   - Resolution: deleted the broken Space, verified the remaining Space uses the correct Dockerfile.
+
+6. **Live validation flakiness: connection resets + default 5s timeouts**
+   - `openenv validate --verbose --url <HF_URL>` intermittently failed on `/openapi.json`, `/mcp`, `/metadata` with read timeouts / connection resets.
+   - Resolution: use a larger timeout (HF CPU basic can be slow and network can be flaky).
+
+### What fixed it (RESOLUTION)
+1. **Restored missing HF deployment artifacts**
+   - Re-added:
+     - `hf_deployment/Dockerfile`
+     - `hf_deployment/pyproject.toml`
+     - `hf_deployment/README.md`
+
+2. **Made `hf_deployment/Dockerfile` lockfile-tolerant**
+   - Copied `uv.lock*` if present.
+   - Used `uv sync --frozen` only when `uv.lock` exists; otherwise runs `uv sync` without `--frozen`.
+
+3. **Recreated and hardened `push_to_hf.py`**
+   - Supports auth from `hf auth login` cached token via `huggingface_hub.get_token()`.
+   - Added a `--wait` mode to print progress polling `/health`.
+   - Added `--no-proxy` and later `--wait-only` to avoid proxy env vars and to avoid HF API calls when network is flaky.
+
+4. **Logged in correctly to HF with write token**
+   - Used:
+     - `hf auth login` (write token)
+     - Confirmed identity via `hf auth whoami` -> `Samarth1401`
+
+5. **Verified the correct Space runtime host from HF API**
+   - Used `https://huggingface.co/api/spaces/Samarth1401/context-router` and read `"host"`:
+     - `https://samarth1401-context-router-fad8335.hf.space`
+   - This removed ambiguity from duplicate Space URLs.
+
+### Final local verification (before HF)
+- `docker build -t context-router-hf:phase2 .` in `hf_deployment/`: SUCCESS
+- Local checks (after waiting for `/health`):
+  - `GET /health` -> 200
+  - `GET /tasks` -> 200
+  - `POST /reset` -> 200 + JSON
+  - `openenv validate --verbose --url http://localhost:8000` -> PASS (6/6)
+
+### Final live verification (HF)
+- Canonical Space URL (from HF API `host` field):
+  - `HF_URL = https://samarth1401-context-router-fad8335.hf.space`
+- Baseline (live):
+  - `Task easy score: 1.0000`
+  - `Task medium score: 0.3657`
+  - `Task hard score: 0.3721`
+- Runtime validation (use larger timeout to avoid HF/network flake):
+  - `openenv validate --verbose --url https://samarth1401-context-router-fad8335.hf.space --timeout 60` -> PASS (6/6)
+
+### Submission-ready artifact
+- Submit this URL:
+  - `https://samarth1401-context-router-fad8335.hf.space` 6b55f06 (feat: hf deployment staging and standalone dockerfile)
