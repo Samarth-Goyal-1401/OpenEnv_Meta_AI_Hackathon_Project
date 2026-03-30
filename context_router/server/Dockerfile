@@ -21,13 +21,18 @@ COPY . .
     
 RUN if [ -f uv.lock ]; then uv sync --frozen; else uv sync; fi
 
+# Avoid copying the virtualenv twice:
+# - we copy `/app/.venv` into the runtime image
+# - we copy `/app/env` (code) without `.venv`
+RUN mv .venv /app/.venv
+
 # Final runtime stage
 FROM ${BASE_IMAGE}
 
 WORKDIR /app
 
 # Copy the virtual environment from builder
-COPY --from=builder /app/env/.venv /app/.venv
+COPY --from=builder /app/.venv /app/.venv
 
 # Copy the environment code
 COPY --from=builder /app/env /app/env
