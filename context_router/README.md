@@ -137,3 +137,32 @@ async def run_episode() -> None:
 if __name__ == "__main__":
     asyncio.run(run_episode())
 ```
+
+## Validation Checklist
+Run these commands from `meta_hackathon` to verify packaging, tests, and OpenEnv contract:
+
+```bash
+.\.venv\Scripts\python.exe -m pytest context_router\tests -q
+.\.venv\Scripts\python.exe context_router\baseline\run_baseline.py --base-url http://localhost:8000
+cd context_router
+openenv validate --url http://localhost:8000
+```
+
+Expected outputs (March 31, 2026 run):
+
+```text
+pytest: 38 passed
+baseline: easy=1.0000 medium=0.3657 hard=0.3721
+openenv validate: passed=true (6/6 required checks)
+```
+
+## API Endpoints
+- `GET /health`
+- `GET /tasks`
+- `POST /reset`
+- `POST /step`
+- `GET /state`
+- `POST /grader`
+- `POST /baseline`
+- `GET /schema`
+- `GET /metadata`

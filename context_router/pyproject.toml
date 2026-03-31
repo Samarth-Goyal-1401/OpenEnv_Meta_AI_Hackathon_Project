@@ -49,3 +49,7 @@ packages = [
 "context_router.graders" = "graders"
 "context_router.tasks" = "tasks"
 "context_router.baseline" = "baseline"
+
+[tool.pytest.ini_options]
+addopts = "-p no:cacheprovider"
+pythonpath = ["."]
