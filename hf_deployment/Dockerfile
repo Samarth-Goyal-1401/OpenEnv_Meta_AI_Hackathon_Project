@@ -1,16 +1,17 @@
-FROM ghcr.io/astral-sh/uv:python3.11-bookworm-slim
+ARG BASE_IMAGE=ghcr.io/meta-pytorch/openenv-base:latest
+FROM ${BASE_IMAGE} AS builder
 
 WORKDIR /app
-ENV UV_COMPILE_BYTECODE=1
-
-COPY pyproject.toml ./
-COPY uv.lock* ./
-
-# Use lockfile if present, otherwise resolve deps on the fly
+COPY pyproject.toml uv.lock* ./
 RUN if [ -f uv.lock ]; then uv sync --frozen --no-dev --no-install-project; else uv sync --no-dev --no-install-project; fi
 
 COPY . .
 RUN if [ -f uv.lock ]; then uv sync --frozen --no-dev; else uv sync --no-dev; fi
+
+FROM ${BASE_IMAGE}
+
+WORKDIR /app
+COPY --from=builder /app /app
 
 ENV PATH="/app/.venv/bin:$PATH"
 ENV PYTHONDONTWRITEBYTECODE=1
