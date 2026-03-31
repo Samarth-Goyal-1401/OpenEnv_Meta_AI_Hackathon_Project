@@ -1108,6 +1108,14 @@ python baseline/run_baseline.py --base-url https://<your-space>.hf.space
    - Symptom: `uv sync` failed while building the editable package inside the Docker build.
    - Root cause: `context_router/.dockerignore` excludes `tests/`, but `context_router/pyproject.toml` declared `context_router.tests` as a package, so setuptools errored when `tests/` wasn't present in the build context.
 
+6. **Container process failed at startup with `exec /app/.venv/bin/uvicorn: no such file or directory`**
+   - Symptom: container exited immediately after `docker run`.
+   - Root cause: Dockerfile moved virtualenv from `.venv` to `/app/.venv`; console scripts can contain absolute interpreter paths, so relocating the venv broke `uvicorn`.
+
+7. **False endpoint verification from port collision**
+   - Symptom: requests to `http://127.0.0.1:8000` still returned healthy responses even after stopping the container.
+   - Root cause: a separate host Python process was already listening on port 8000, masking container endpoint checks.
+
 ### What fixed it (RESOLUTION)
 
 1. **Hardened `/grader` validation**
@@ -1125,6 +1133,12 @@ python baseline/run_baseline.py --base-url https://<your-space>.hf.space
 
 4. **Unblocked Docker build packaging**
    - Removed `context_router.tests` from the setuptools package list in `context_router/pyproject.toml` so the Docker build doesn't require shipping `tests/` in the image.
+
+5. **Fixed container startup reliability**
+   - Updated `context_router/server/Dockerfile` to keep venv in-place under `/app/env/.venv` and use that path in `PATH`, instead of moving the venv.
+
+6. **Made runtime verification deterministic**
+   - Validated the container on a dedicated host port (`18080`) to avoid collisions with any host process on `8000`.
 
 ### Current status
 

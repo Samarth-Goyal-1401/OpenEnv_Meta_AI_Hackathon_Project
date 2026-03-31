@@ -21,24 +21,18 @@ COPY . .
     
 RUN if [ -f uv.lock ]; then uv sync --frozen; else uv sync; fi
 
-# Avoid copying the virtualenv twice:
-# - we copy `/app/.venv` into the runtime image
-# - we copy `/app/env` (code) without `.venv`
-RUN mv .venv /app/.venv
-
 # Final runtime stage
 FROM ${BASE_IMAGE}
 
 WORKDIR /app
 
-# Copy the virtual environment from builder
-COPY --from=builder /app/.venv /app/.venv
-
-# Copy the environment code
+# Copy the environment code (including its `.venv`).
+# NOTE: Do not relocate the venv after creation; console scripts can embed absolute
+# interpreter paths in shebangs, and moving breaks them.
 COPY --from=builder /app/env /app/env
 
 # Set PATH to use the virtual environment
-ENV PATH="/app/.venv/bin:$PATH"
+ENV PATH="/app/env/.venv/bin:$PATH"
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
