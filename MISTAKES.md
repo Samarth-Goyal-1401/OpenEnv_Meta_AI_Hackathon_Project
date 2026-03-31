@@ -1104,6 +1104,10 @@ python baseline/run_baseline.py --base-url https://<your-space>.hf.space
    - Symptom: Healthchecks used `http://localhost:8000/health` style URL strings.
    - Risk: Violates TEAM_RULEBOOK Section 4 "hardcoded URLs" rule, even if loopback.
 
+5. **Docker build failed in `context_router/server/Dockerfile` with `error: package directory 'tests' does not exist`**
+   - Symptom: `uv sync` failed while building the editable package inside the Docker build.
+   - Root cause: `context_router/.dockerignore` excludes `tests/`, but `context_router/pyproject.toml` declared `context_router.tests` as a package, so setuptools errored when `tests/` wasn't present in the build context.
+
 ### What fixed it (RESOLUTION)
 
 1. **Hardened `/grader` validation**
@@ -1118,6 +1122,9 @@ python baseline/run_baseline.py --base-url https://<your-space>.hf.space
 
 3. **Logged audit details**
    - Added `SANITATION_AUDIT.md` with an explicit list of findings and fixes.
+
+4. **Unblocked Docker build packaging**
+   - Removed `context_router.tests` from the setuptools package list in `context_router/pyproject.toml` so the Docker build doesn't require shipping `tests/` in the image.
 
 ### Current status
 

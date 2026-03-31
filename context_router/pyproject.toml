@@ -40,7 +40,6 @@ packages = [
     "context_router.server",
     "context_router.graders",
     "context_router.tasks",
-    "context_router.tests",
     "context_router.baseline",
 ]
 
@@ -49,5 +48,4 @@ packages = [
 "context_router.server" = "server"
 "context_router.graders" = "graders"
 "context_router.tasks" = "tasks"
-"context_router.tests" = "tests"
 "context_router.baseline" = "baseline"

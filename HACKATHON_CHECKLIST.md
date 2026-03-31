@@ -6,7 +6,8 @@
 ---
 
 ## 🔲 1. The Disqualification Zero-Tolerance Check
-*These checks are run automatically by scripts. If they fail, humans will never see your code.*
+
+_These checks are run automatically by scripts. If they fail, humans will never see your code._
 
 - [ ] `openenv validate --verbose` runs with **0 errors**.
 - [ ] HuggingFace Space deployed and `ping https://<your-space>.hf.space/health` returns `HTTP 200 OK`.
@@ -16,7 +17,8 @@
 - [ ] Target domain is **NOT** a classic game (no Chess, Tic-Tac-Toe, Snake).
 
 ## 🔲 2. The Golden Ratio (The 3 Tasks)
-*Checking the core OpenEnv requirements.*
+
+_Checking the core OpenEnv requirements._
 
 - [ ] You have exactly 1 Environment Class.
 - [ ] You have exactly 3 tasks listed in `openenv.yaml` (Easy, Medium, Hard).
@@ -25,7 +27,8 @@
 - [ ] The `/grader` endpoint accepts a trajectory and returns a `{"score": X.X}` where X.X is between 0.0 and 1.0.
 
 ## 🔲 3. The Baseline Script Proof
-*Proving your environment is playable.*
+
+_Proving your environment is playable._
 
 - [ ] `baseline/run_baseline.py` exists.
 - [ ] It accepts a `--base-url` argument.
@@ -35,7 +38,8 @@
 - [ ] It `exit(0)` on success.
 
 ## 🔲 4. The Defensive Programming Check
-*Agents do stupid things. Your server must never crash.*
+
+_Agents do stupid things. Your server must never crash._
 
 - [ ] **NO BARE `raise`**: Your `step()` function does not contain unhandled `raise ValueError(...)`.
 - [ ] **NO SILENT FAILS**: You do not use `except: pass` in your logic.
@@ -45,7 +49,8 @@
 - [ ] **MAX STEPS**: You have a hard-coded maximum step limit in `step()` to prevent infinite episodes (e.g., reaching 50 steps forces `done=True`).
 
 ## 🔲 5. The "Wow Factor" (Human Judging)
-*Once scripts pass, humans grade these specific elements.*
+
+_Once scripts pass, humans grade these specific elements._
 
 - [ ] **README Completeness:** Action Space documented? Observation Space documented? Reward formulas written out in math/text? Setup instructions clear?
 - [ ] **Partial Credit:** Your medium/hard task graders do not just return 0.0 or 1.0. They return 0.3, 0.7, etc., based on partial success.
@@ -53,6 +58,7 @@
 - [ ] **Clean Git:** No API keys, no `.venv`, no ` outputs/` logs committed to the repository or HuggingFace Space.
 
 ## 🔲 6. The Final Run (Exact Sequence)
+
 Run this **exact sequence** one last time before submitting the URL. Every command must succeed.
 
 ```bash
