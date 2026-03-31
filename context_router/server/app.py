@@ -1,8 +1,10 @@
 import logging
 import random
+from collections.abc import Sequence
 from typing import Any
 
 from openenv.core.env_server import create_app
+from fastapi import HTTPException
 from pydantic import BaseModel, Field
 
 try:
@@ -21,6 +23,8 @@ except (ImportError, ValueError):
     from tasks.task_definitions import TASKS
 
 logger = logging.getLogger(__name__)
+SUPPORTED_TASKS = frozenset({"easy", "medium", "hard"})
+MAX_GRADER_TRAJECTORY_LEN = 512
 
 
 # RULEBOOK PB1: pass the environment class, never an instance.
@@ -29,7 +33,11 @@ app = create_app(ContextRouterEnv, CacheAction, CacheObservation, env_name="cont
 
 class GraderRequest(BaseModel):
     task_id: str = Field(..., description="Task id: easy | medium | hard")
-    trajectory: list[Any] = Field(default_factory=list)
+    trajectory: list[Any] = Field(
+        default_factory=list,
+        max_length=MAX_GRADER_TRAJECTORY_LEN,
+        description=f"Episode observations (max {MAX_GRADER_TRAJECTORY_LEN} steps)",
+    )
 
 
 @app.get("/health")
@@ -58,14 +66,33 @@ def _to_observation(item: Any) -> CacheObservation:
     raise TypeError(f"Unsupported trajectory element type: {type(item)}")
 
 
+def _validate_trajectory(trajectory: Sequence[Any]) -> None:
+    if len(trajectory) > MAX_GRADER_TRAJECTORY_LEN:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Trajectory too long; max {MAX_GRADER_TRAJECTORY_LEN} items",
+        )
+
+
 @app.post("/grader")
 def grader_endpoint(req: GraderRequest) -> dict[str, float]:
+    if req.task_id not in SUPPORTED_TASKS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unsupported task_id '{req.task_id}'. Use one of: easy, medium, hard.",
+        )
+    _validate_trajectory(req.trajectory)
     graders = {"easy": grader_easy, "medium": grader_medium, "hard": grader_hard}
-    grader_fn = graders.get(req.task_id, grader_easy)
+    grader_fn = graders[req.task_id]
     try:
         trajectory = [_to_observation(item) for item in req.trajectory]
         score = grader_fn(trajectory)
         return {"score": float(max(0.0, min(1.0, score)))}
+    except HTTPException:
+        raise
+    except (TypeError, ValueError) as e:
+        logger.warning("/grader rejected invalid payload for task '%s': %s", req.task_id, e)
+        raise HTTPException(status_code=422, detail="Invalid trajectory payload") from e
     except Exception as e:
         logger.error("/grader failed for task '%s': %s", req.task_id, e, exc_info=True)
         return {"score": 0.0}
