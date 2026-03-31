@@ -1151,3 +1151,44 @@ python baseline/run_baseline.py --base-url https://<your-space>.hf.space
 
 1. Run Docker builds for all images and smoke test endpoints (`/health`, `/tasks`, `/grader`, `/baseline`) to confirm runtime user + healthchecks work in the actual base images.
 2. Run `openenv validate --verbose` against the local container and HF Space before pushing.
+
+## Session 17 - March 31, 2026 - Phase 3 Finalization + HF Build Fix (Dev 2 + Codex)
+
+### What was attempted
+
+- Ran Phase 3 final sequence end-to-end: local `openenv build`, local container smoke, baseline script, local `openenv validate`, then deploy and verify on HuggingFace.
+
+### What broke (MISTAKE LOG)
+
+1. **HF Docker build failed: `openenv-base:latest` not found**
+   - Symptom: Space build fails with `docker.io/library/openenv-base:latest: not found` and Space stays in `BUILD_ERROR` / returns 503.
+   - Root cause: The Space builder does not have a local `openenv-base:latest` tag; it can only pull published images.
+
+2. **Windows console encoding error during `openenv build`**
+   - Symptom: `charmap` codec failure while printing the success checkmark character after a successful Docker build.
+   - Fix: Run `openenv build` with UTF-8 environment variables set (`PYTHONIOENCODING=utf-8`, `LANG=en_US.UTF-8`, `LC_ALL=en_US.UTF-8`).
+
+3. **Local baseline script failed due to missing runtime deps in the venv**
+   - Symptom: `baseline/run_baseline.py` failed with missing `httpx`, and then missing `openenv` imports.
+   - Fix: Install `httpx` and `openenv-core` into the active `.venv`, and install the local package editable (`pip install -e . --no-deps`).
+
+### What fixed it (RESOLUTION)
+
+1. **Deployed via the `hf_deployment/` artifact to unblock HF runtime**
+   - Used `push_to_hf.py` to upload `hf_deployment/` to the Space, which uses a published base image so HF can build successfully.
+   - Verified Space runtime stage moved to `RUNNING`.
+
+2. **Verified Gate 2 (live) checks**
+   - `GET /health` -> 200
+   - `POST /reset` -> 200 + JSON
+   - `python context_router/baseline/run_baseline.py --base-url <HF_URL>` -> prints 3 scores
+   - `openenv validate --verbose --url <HF_URL> --timeout 60` -> PASS (6/6)
+
+### Submission-ready artifact
+
+- Submit this URL:
+  - `https://samarth1401-context-router-5185b8f.hf.space`
+
+### Notes / Follow-ups
+
+- If strict rule enforcement requires the Space Dockerfile to start from `openenv-base` and to deploy via `openenv push`, ensure the Space Dockerfile pulls `ghcr.io/meta-pytorch/openenv-base:latest` (not an unresolvable local tag) so HF can build it.
