@@ -126,3 +126,6 @@ The Hugging Face Space card + environment-facing docs live here:
 
 - `context_router/README.md`
 
+Internal hackathon process docs (checklists, rulebooks, templates) live here:
+
+- `FOUNDATION/README.md`
