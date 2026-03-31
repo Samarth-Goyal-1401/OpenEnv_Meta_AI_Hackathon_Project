@@ -86,3 +86,110 @@ def test_clamped() -> None:
     score = grader_medium(corrupted)
     assert 0.0 <= score <= 1.0
 
+
+def test_better_trajectory_beats_worse() -> None:
+    worse = [
+        {
+            "vram_utilization": 0.90,
+            "incoming_tokens": 150,
+            "memory_blocks": [_block("system_prompt", 1.0), _block("small_talk", 0.1)],
+            "oom_triggered": False,
+            "message": "",
+            "done": False,
+            "reward": 0.0,
+        },
+        {
+            "vram_utilization": 0.70,
+            "incoming_tokens": 150,
+            "memory_blocks": [_block("small_talk", 0.1)],
+            "oom_triggered": False,
+            "message": "",
+            "done": True,
+            "reward": 0.0,
+        },
+    ]
+    better = [
+        {
+            "vram_utilization": 0.90,
+            "incoming_tokens": 150,
+            "memory_blocks": [
+                _block("system_prompt", 1.0),
+                _block("code_snippet", 0.9),
+            ],
+            "oom_triggered": False,
+            "message": "",
+            "done": False,
+            "reward": 0.0,
+        },
+        {
+            "vram_utilization": 0.35,
+            "incoming_tokens": 150,
+            "memory_blocks": [
+                _block("system_prompt", 1.0),
+                _block("code_snippet", 0.85),
+            ],
+            "oom_triggered": False,
+            "message": "",
+            "done": True,
+            "reward": 0.0,
+        },
+    ]
+    worse_score = grader_medium(worse)
+    better_score = grader_medium(better)
+    assert better_score > worse_score
+
+
+def test_oom_penalty_consistency() -> None:
+    no_oom = [
+        {
+            "vram_utilization": 0.50,
+            "oom_triggered": False,
+            "memory_blocks": [_block("system_prompt", 1.0)],
+            "done": True,
+        },
+    ]
+    with_oom = [
+        {
+            "vram_utilization": 0.50,
+            "oom_triggered": True,
+            "memory_blocks": [_block("system_prompt", 1.0)],
+            "done": True,
+        },
+    ]
+    score_no_oom = grader_medium(no_oom)
+    score_with_oom = grader_medium(with_oom)
+    assert score_with_oom < score_no_oom
+
+
+def test_stress_consistency() -> None:
+    trajectory = [
+        {
+            "vram_utilization": 0.85,
+            "incoming_tokens": 100,
+            "memory_blocks": [_block("system_prompt", 1.0)],
+            "oom_triggered": False,
+            "message": "",
+            "done": False,
+            "reward": 0.0,
+        },
+        {
+            "vram_utilization": 0.60,
+            "incoming_tokens": 80,
+            "memory_blocks": [_block("system_prompt", 1.0)],
+            "oom_triggered": False,
+            "message": "",
+            "done": False,
+            "reward": 0.0,
+        },
+        {
+            "vram_utilization": 0.42,
+            "incoming_tokens": 60,
+            "memory_blocks": [_block("system_prompt", 1.0)],
+            "oom_triggered": False,
+            "message": "",
+            "done": True,
+            "reward": 0.0,
+        },
+    ]
+    scores = [grader_medium(trajectory) for _ in range(10)]
+    assert len(set(scores)) == 1, f"Inconsistent scores: {scores}"
