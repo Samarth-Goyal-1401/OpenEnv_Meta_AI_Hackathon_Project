@@ -1192,3 +1192,61 @@ python baseline/run_baseline.py --base-url https://<your-space>.hf.space
 ### Notes / Follow-ups
 
 - If strict rule enforcement requires the Space Dockerfile to start from `openenv-base` and to deploy via `openenv push`, ensure the Space Dockerfile pulls `ghcr.io/meta-pytorch/openenv-base:latest` (not an unresolvable local tag) so HF can build it.
+
+## Session 18 - March 31, 2026 - Grader Anti-Gaming Hardening + Rule-Compliant HF Deploy
+
+### What was attempted
+
+- Improve grader quality before submission by preventing block-replacement exploits, then redeploy through the official `openenv push` path while staying aligned with the `openenv-base` rule.
+
+### What broke (MISTAKE LOG)
+
+1. **Medium/hard graders gave retention credit to the wrong surviving blocks**
+   - Symptom: scoring relied on `block_type` presence and counts, so a trajectory could lose the original important block and still receive retention credit if another block of the same type survived.
+   - Risk: agent can game the grader without truly preserving important context.
+
+2. **Hard grader under-penalized late retention collapse**
+   - Symptom: trajectory-average retention masked a bad final state, so a run that dropped a critical block late could tie a stable run.
+   - Risk: final episode quality was not reflected strongly enough in the score.
+
+3. **Rule-compliant HF Docker build initially failed on editable install timing**
+   - Symptom: `uv sync` before `COPY . .` tried to build the local package too early and failed because package directories were not present yet.
+   - Fix: use `uv sync --no-install-project` before copy, then run full `uv sync` after `COPY . .`.
+
+4. **Rule-compliant HF runtime initially failed with `ModuleNotFoundError: context_router`**
+   - Symptom: the container started but `uvicorn context_router.server.app:app` could not import the package.
+   - Fix: ensure the Dockerfile installs the project after copying the source tree.
+
+5. **HF validation remained intermittently flaky on `openapi.json`**
+   - Symptom: direct `curl` to `/openapi.json` returned `200`, but `openenv validate --url ...` intermittently hit connection resets on HF edge routing.
+   - Risk: validation can fail transiently even while the app is healthy.
+
+### What fixed it (RESOLUTION)
+
+1. **Hardened grader retention logic**
+   - Updated `grader_medium.py` and `grader_hard.py` to track retention using the original important `block_id` set, not only block types.
+   - Mixed trajectory retention with final retention so late collapse is penalized.
+
+2. **Added anti-gaming tests**
+   - Added focused tests proving replacement blocks score lower and late retention collapse is penalized.
+   - Focused grader suite result: `30 passed`.
+
+3. **Added submission-safety tooling**
+   - Added `context_router/scripts/final_verify.ps1` for one-command verification.
+   - Added `.gitignore` / `.dockerignore` files to reduce cache junk in uploads and repo noise.
+
+4. **Re-established rule-compliant live deployment**
+   - `openenv push` now deploys a Space that uses a pullable `ghcr.io/meta-pytorch/openenv-base:latest` base and serves successfully at:
+     - `https://samarth1401-context-router.hf.space`
+
+### Current live status
+
+- `GET /health` -> 200
+- `POST /reset` -> 200 + JSON
+- `python context_router/baseline/run_baseline.py --base-url https://samarth1401-context-router.hf.space` -> PASS
+- `openenv validate --verbose --url https://samarth1401-context-router.hf.space --timeout 60` -> intermittent HF reset on `/openapi.json`, but direct endpoint checks return 200
+
+### Submission-ready artifact
+
+- Preferred submission URL:
+  - `https://samarth1401-context-router.hf.space`

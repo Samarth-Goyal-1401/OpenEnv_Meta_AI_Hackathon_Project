@@ -26,6 +26,16 @@ def _block_get(block: Any, key: str, default: Any) -> Any:
     return getattr(block, key, default)
 
 
+def _block_id(block: Any) -> int | None:
+    value = _block_get(block, "block_id", None)
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _linear_ramp(value: float, threshold: float, scale: float) -> float:
     """Linear ramp: gives partial credit as value approaches threshold."""
     if value >= threshold:
@@ -33,30 +43,37 @@ def _linear_ramp(value: float, threshold: float, scale: float) -> float:
     return max(0.0, (value / threshold) * scale)
 
 
-def _track_trajectory_retention(trajectory: list[Any]) -> float:
-    """Track critical block retention throughout entire trajectory, not just at end."""
+def _important_block_ids(blocks: list[Any]) -> set[int]:
+    important_ids: set[int] = set()
+    for block in blocks:
+        block_id = _block_id(block)
+        if block_id is None:
+            continue
+        block_type = _block_get(block, "block_type", "")
+        attention = float(_block_get(block, "attention_score", 0.0))
+        if block_type in CRITICAL_TYPES or attention >= HIGH_ATTENTION_THRESHOLD:
+            important_ids.add(block_id)
+    return important_ids
+
+
+def _track_trajectory_retention(trajectory: list[Any], important_ids: set[int]) -> float:
+    """Track retention of the original important block IDs throughout the episode."""
     if len(trajectory) < 2:
         return 0.0
-
-    critical_retention_over_time = []
-
-    for obs in trajectory:
-        blocks = _blocks(obs)
-        current_critical = {
-            _block_get(b, "block_type", "")
-            for b in blocks
-            if _block_get(b, "block_type", "") in CRITICAL_TYPES
-        }
-        critical_retention_over_time.append(len(current_critical))
-
-    initial_count = critical_retention_over_time[0]
-    if initial_count == 0:
+    if not important_ids:
         return 1.0
 
-    avg_retention = sum(critical_retention_over_time) / len(
-        critical_retention_over_time
-    )
-    return avg_retention / initial_count
+    retention_over_time = []
+    for obs in trajectory:
+        current_ids = {
+            block_id
+            for block in _blocks(obs)
+            for block_id in [_block_id(block)]
+            if block_id is not None
+        }
+        retention_over_time.append(len(current_ids & important_ids) / len(important_ids))
+
+    return sum(retention_over_time) / len(retention_over_time)
 
 
 def _compute_vram_stability(vram_values: list[float]) -> float:
@@ -100,23 +117,20 @@ def grader_hard(trajectory: list[Any]) -> float:
 
         initial_blocks = _blocks(first)
         final_blocks = _blocks(final)
-        initial_critical = {
-            _block_get(b, "block_type", "")
-            for b in initial_blocks
-            if _block_get(b, "block_type", "") in CRITICAL_TYPES
-        }
-        final_critical = {
-            _block_get(b, "block_type", "")
-            for b in final_blocks
-            if _block_get(b, "block_type", "") in CRITICAL_TYPES
+        important_ids = _important_block_ids(initial_blocks)
+        final_ids = {
+            block_id
+            for block in final_blocks
+            for block_id in [_block_id(block)]
+            if block_id is not None
         }
 
-        if initial_critical:
-            final_retention_ratio = len(final_critical) / len(initial_critical)
+        if important_ids:
+            final_retention_ratio = len(final_ids & important_ids) / len(important_ids)
         else:
             final_retention_ratio = 1.0
 
-        trajectory_retention = _track_trajectory_retention(trajectory)
+        trajectory_retention = _track_trajectory_retention(trajectory, important_ids)
         stability_score = _compute_vram_stability(vram_values)
 
         if (
@@ -129,7 +143,9 @@ def grader_hard(trajectory: list[Any]) -> float:
             return 1.0
 
         survival_component = _linear_ramp(steps, MAX_STEPS, 0.35)
-        retention_component = _linear_ramp(trajectory_retention, 0.8, 0.30)
+        retention_component = _linear_ramp(
+            (trajectory_retention + final_retention_ratio) / 2.0, 0.8, 0.30
+        )
         vram_component = _linear_ramp(1.0 - avg_vram, 1.0 - VRAM_TARGET, 0.25)
         stability_component = stability_score * 0.10
 

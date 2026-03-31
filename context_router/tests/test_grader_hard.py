@@ -115,3 +115,56 @@ def test_stress_consistency() -> None:
     ]
     scores = [grader_hard(trajectory) for _ in range(10)]
     assert len(set(scores)) == 1, f"Inconsistent scores: {scores}"
+
+
+def test_replacement_critical_blocks_score_lower() -> None:
+    original = [
+        _obs(
+            0.85,
+            False,
+            [
+                _block("system_prompt", 0),
+                _block("code_snippet", 1),
+                _block("rag_context", 2),
+            ],
+            False,
+        ),
+        _obs(
+            0.32,
+            False,
+            [
+                _block("system_prompt", 0),
+                _block("code_snippet", 1),
+                _block("rag_context", 2),
+            ],
+            True,
+        ),
+    ]
+    replaced = [
+        original[0],
+        _obs(
+            0.32,
+            False,
+            [
+                _block("system_prompt", 10),
+                _block("code_snippet", 11),
+                _block("rag_context", 12),
+            ],
+            True,
+        ),
+    ]
+    assert grader_hard(replaced) < grader_hard(original)
+
+
+def test_late_retention_collapse_is_penalized() -> None:
+    stable = [
+        _obs(0.85, False, [_block("system_prompt", 0), _block("code_snippet", 1)], False),
+        _obs(0.60, False, [_block("system_prompt", 0), _block("code_snippet", 1)], False),
+        _obs(0.38, False, [_block("system_prompt", 0), _block("code_snippet", 1)], True),
+    ]
+    collapses_late = [
+        _obs(0.85, False, [_block("system_prompt", 0), _block("code_snippet", 1)], False),
+        _obs(0.60, False, [_block("system_prompt", 0), _block("code_snippet", 1)], False),
+        _obs(0.38, False, [_block("system_prompt", 0)], True),
+    ]
+    assert grader_hard(collapses_late) < grader_hard(stable)
