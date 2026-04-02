@@ -1,4 +1,3 @@
-import os
 import sys
 from pathlib import Path
 
@@ -29,25 +28,68 @@ except ImportError as error:
     sys.exit(1)
 
 
-def _test() -> None:
-    print("6. Initializing Environment...")
+def _score_for_task(task_name: str) -> float:
     env = ContextRouterEnv()
-    print("[OK] Env initialized")
-
-    print("7. Setting task 'easy'...")
-    env.set_task("easy")
-    print("[OK] task set")
-
-    print("8. Resetting env...")
+    env.set_task(task_name)
     observation = env.reset(seed=42)
-    print(f"[OK] reset ok. VRAM: {observation.vram_utilization}")
+    if observation.done:
+        raise AssertionError(f"{task_name}: reset should not be done")
+    if not observation.memory_blocks:
+        raise AssertionError(f"{task_name}: reset returned no memory blocks")
 
-    print("9. Running easy test...")
-    trajectory = [observation] * 10
-    score = grader_easy(trajectory)
-    print(f"  Easy score: {score:.4f}")
+    trajectory = [observation]
+    max_steps = 8
 
-    print("\n[OK] ALL LOCAL LOGIC CHECKS PASSED")
+    for _ in range(max_steps):
+        if not observation.memory_blocks or observation.done:
+            break
+
+        target_id = observation.memory_blocks[0].block_id
+        if task_name == "easy":
+            action = CacheAction(
+                target_block_id=target_id,
+                tactic=EvictionTactic.EVICT,
+            )
+        elif task_name == "medium":
+            action = CacheAction(
+                target_block_id=target_id,
+                tactic=EvictionTactic.COMPRESS,
+            )
+        else:
+            action = CacheAction(
+                target_block_id=target_id,
+                tactic=EvictionTactic.COMPRESS,
+                priority=3,
+            )
+
+        observation = env.step(action)
+        trajectory.append(observation)
+
+    if task_name == "easy":
+        score = grader_easy(trajectory)
+    elif task_name == "medium":
+        score = grader_medium(trajectory)
+    else:
+        score = grader_hard(trajectory)
+
+    if not 0.0 <= score <= 1.0:
+        raise AssertionError(f"{task_name}: grader returned out-of-range score {score}")
+    return score
+
+
+def _test() -> None:
+    print("6. Running task-level smoke checks...")
+    scores = {
+        "easy": _score_for_task("easy"),
+        "medium": _score_for_task("medium"),
+        "hard": _score_for_task("hard"),
+    }
+    print("7. Grader score ranges verified (0..1):")
+    print(f"  Easy:   {scores['easy']:.4f}")
+    print(f"  Medium: {scores['medium']:.4f}")
+    print(f"  Hard:   {scores['hard']:.4f}")
+
+    print("\n[OK] LOCAL IMPLEMENTATION SMOKE CHECKS PASSED")
 
 
 if __name__ == "__main__":

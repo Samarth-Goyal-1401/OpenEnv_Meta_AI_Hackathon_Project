@@ -12,6 +12,11 @@ def test_health_endpoint_returns_healthy() -> None:
     assert response.json().get("status") == "healthy"
 
 
+def test_single_health_route_is_registered() -> None:
+    health_routes = [route for route in app.routes if getattr(route, "path", "") == "/health"]
+    assert len(health_routes) == 1
+
+
 def test_tasks_endpoint_exposes_three_difficulties() -> None:
     response = client.get("/tasks")
     assert response.status_code == 200

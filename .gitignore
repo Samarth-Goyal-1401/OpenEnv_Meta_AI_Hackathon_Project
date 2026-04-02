@@ -4,6 +4,8 @@
 __pycache__/
 *.py[cod]
 *$py.class
+**/.pytest_cache/
+hf_deployment/pytest-cache-files-*/
 
 # OS generated files
 .DS_Store

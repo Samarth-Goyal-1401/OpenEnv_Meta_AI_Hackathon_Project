@@ -1,5 +1,4 @@
 import logging
-import random
 from collections.abc import Sequence
 from typing import Any
 
@@ -38,11 +37,6 @@ class GraderRequest(BaseModel):
         max_length=MAX_GRADER_TRAJECTORY_LEN,
         description=f"Episode observations (max {MAX_GRADER_TRAJECTORY_LEN} steps)",
     )
-
-
-@app.get("/health")
-def health() -> dict[str, str]:
-    return {"status": "ok"}
 
 
 @app.get("/tasks")
@@ -113,26 +107,27 @@ def baseline_endpoint() -> dict[str, float]:
 def _run_baseline_episode(task_name: str) -> float:
     env = ContextRouterEnv()
     env.set_task(task_name)
-    env.reset(seed=42)
+    first_obs = env.reset(seed=42)
 
-    rng = random.Random(42)
+    initial_blocks = list(first_obs.memory_blocks)
+    protected_ids = _protected_block_ids(initial_blocks)
     trajectory: list[CacheObservation] = []
 
-    for _ in range(10):
+    for _ in range(ContextRouterEnv.MAX_STEPS):
         if not env._blocks:
             break
 
-        target_block_id = rng.choice(list(env._blocks.keys()))
-        if task_name == "easy":
-            tactic = rng.choice([EvictionTactic.EVICT, EvictionTactic.RETAIN])
-        else:
-            tactic = rng.choice(
-                [EvictionTactic.EVICT, EvictionTactic.RETAIN, EvictionTactic.COMPRESS]
-            )
-        priority = None
-        if task_name == "hard":
-            block = env._blocks[target_block_id]
-            priority = _hard_priority_from_block(block)
+        total_tokens = sum(block.token_count for block in env._blocks.values())
+        utilization = total_tokens / max(1, env._max_capacity)
+        target_block_id, tactic = _baseline_action_for_state(
+            task_name=task_name,
+            blocks=env._blocks,
+            protected_ids=protected_ids,
+            utilization=utilization,
+        )
+
+        block = env._blocks[target_block_id]
+        priority = _hard_priority_from_block(block) if task_name == "hard" else None
 
         obs = env.step(
             CacheAction(
@@ -147,6 +142,56 @@ def _run_baseline_episode(task_name: str) -> float:
 
     grader_fn = {"easy": grader_easy, "medium": grader_medium, "hard": grader_hard}[task_name]
     return grader_fn(trajectory)
+
+
+def _protected_block_ids(blocks: list[Any]) -> set[int]:
+    protected_ids: set[int] = set()
+    for block in blocks:
+        block_id = int(getattr(block, "block_id", -1))
+        block_type = str(getattr(block, "block_type", ""))
+        attention = float(getattr(block, "attention_score", 0.0))
+        if block_id < 0:
+            continue
+        if block_type in {"system_prompt", "code_snippet"} or attention >= 0.6:
+            protected_ids.add(block_id)
+    return protected_ids
+
+
+def _baseline_action_for_state(
+    *,
+    task_name: str,
+    blocks: dict[int, Any],
+    protected_ids: set[int],
+    utilization: float,
+) -> tuple[int, EvictionTactic]:
+    all_ids = set(blocks.keys())
+    candidate_ids = [block_id for block_id in all_ids if block_id not in protected_ids]
+    if not candidate_ids:
+        candidate_ids = list(all_ids)
+
+    def ranking_key(block_id: int) -> tuple[float, int, int]:
+        block = blocks[block_id]
+        attention = float(getattr(block, "attention_score", 0.0))
+        age = int(getattr(block, "age", 0))
+        tokens = int(getattr(block, "token_count", 0))
+        return (attention, -age, -tokens)
+
+    target_block_id = min(candidate_ids, key=ranking_key)
+    target_block = blocks[target_block_id]
+    target_tokens = int(getattr(target_block, "token_count", 0))
+
+    if task_name == "easy":
+        if utilization > 0.55:
+            return target_block_id, EvictionTactic.EVICT
+        return target_block_id, EvictionTactic.RETAIN
+
+    if utilization > 0.72:
+        if target_tokens >= 260:
+            return target_block_id, EvictionTactic.COMPRESS
+        return target_block_id, EvictionTactic.EVICT
+    if utilization > 0.55:
+        return target_block_id, EvictionTactic.COMPRESS
+    return target_block_id, EvictionTactic.RETAIN
 
 
 def _hard_priority_from_block(block: Any) -> int:
