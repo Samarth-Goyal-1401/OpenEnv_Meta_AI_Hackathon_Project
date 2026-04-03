@@ -15,10 +15,10 @@ _These checks are run automatically by scripts. If they fail, humans will never 
 - [ ] Docker builds successfully (`openenv build`).
 - [ ] `openenv.yaml` exists at the root, is valid, and matches your python types.
 - [ ] `Dockerfile` exists at the root (no `hf_deployment` subdirectories).
-- [ ] `inference.py` exists at the root.
-- [ ] `inference.py` uses the standard OpenAI Client for all LLM calls.
-- [ ] `inference.py` relies solely on `API_BASE_URL`, `MODEL_NAME`, and `HF_TOKEN` environment variables.
-- [ ] `inference.py` stdout formatting exactly matches the `[START]`, `[STEP]`, `[END]` required tags.
+- [x] `inference.py` exists at the root.
+- [x] `inference.py` uses the standard OpenAI Client for all LLM calls.
+- [x] `inference.py` relies solely on `API_BASE_URL`, `MODEL_NAME`, and `HF_TOKEN` environment variables.
+- [x] `inference.py` stdout formatting exactly matches the `[START]`, `[STEP]`, `[END]` required tags.
 - [ ] Target domain is **NOT** a classic game (no Chess, Tic-Tac-Toe, Snake).
 
 ## 🔲 2. The Golden Ratio (The 3 Tasks)
@@ -46,8 +46,8 @@ _Proving your environment is playable._
 
 _Agents do stupid things. Your server must never crash._
 
-- [ ] **NO BARE `raise`**: Your `step()` function does not contain unhandled `raise ValueError(...)`.
-- [ ] **NO SILENT FAILS**: You do not use `except: pass` in your logic.
+- [x] **NO BARE `raise`**: Your `step()` function does not contain unhandled `raise ValueError(...)`.
+- [x] **NO SILENT FAILS**: You do not use `except: pass` in your logic.
 - [ ] **DETERMINISM**: Calling `reset(seed=42)` twice yields the exact same scenario.
 - [ ] **STATE BLEED**: `episode_id` is a newly generated UUID inside every single `reset()` call.
 - [ ] **BOUNDARIES**: Grader scores are strictly wrapped in `max(0.0, min(1.0, score))`.

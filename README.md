@@ -19,13 +19,16 @@ The observation includes:
 - `memory_blocks`: each with `block_id`, `block_type`, `attention_score`, `token_count`, `age`
 - `oom_triggered`, `message`, and OpenEnv-inherited `done` / `reward`
 
+### Delayed Hallucination Penalties
+If the agent incorrectly evicts a critical "hidden" block (like `system_prompt` or core `user_query`), the environment activates a delayed penalty. Exactly 5 steps after the critical block is lost, a massive **HALLUCINATION_ERROR** block (+500 tokens) will be forcefully injected into the VRAM, typically cascading into an OOM state. This prevents short-term memorization models from gaming the grader.
+
 ## Tasks
 
 There are three deterministic task tiers:
 
 - **Easy**: reduce utilization below `0.5` without OOM using `evict|retain`
 - **Medium**: reduce below `0.4` while preserving critical blocks; `compress` is allowed
-- **Hard**: survive a longer horizon with stability, retention, and a priority mechanism that can inject extra pressure when misused
+- **Hard**: survive a longer horizon with stability, retention, priority mechanisms, and avoiding the 5-step delayed hallucination penalties.
 
 ## Quickstart (Local)
 
@@ -102,6 +105,8 @@ Core OpenEnv endpoints (provided by `openenv-core` app wrapper):
 
 Project-specific endpoints:
 
+- `GET /` (Live interactive Visual Dashboard)
+- `GET /dashboard/state` (Real-time state polling)
 - `GET /tasks` (lists easy/medium/hard and their action schemas)
 - `POST /grader` (scores a submitted trajectory)
 - `POST /baseline` (runs an internal baseline policy and returns 3 scores)
