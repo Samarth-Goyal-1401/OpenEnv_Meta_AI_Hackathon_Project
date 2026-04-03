@@ -201,27 +201,15 @@ def _fallback_action(task_id: str, obs: dict) -> dict:
     return action
 
 
-def _env_request(method: str, path: str, json_data: dict | None = None) -> dict:
-    """Make an HTTP request to the OpenEnv server."""
-    url = f"{ENV_SERVER_URL}{path}"
-    with httpx.Client(timeout=30, trust_env=False) as http:
-        if method == "GET":
-            resp = http.get(url)
-        else:
-            resp = http.post(url, json=json_data or {})
-        resp.raise_for_status()
-        return resp.json()
-
-
-def run_task(task_id: str) -> float:
+async def run_task(task_id: str, env) -> float:
     """Run one task episode and emit structured [START]/[STEP]/[END] logs."""
     print(f"[START] Task: {task_id}")
 
     try:
-        # Reset the environment
-        reset_resp = _env_request("POST", "/reset")
-        obs = reset_resp.get("observation", reset_resp)
-        done = reset_resp.get("done", False)
+        # Reset the environment via persistent WebSocket
+        step_result = await env.reset()
+        obs = step_result.observation.model_dump()
+        done = step_result.done
     except Exception as e:
         print(f"[STEP] Step: 1, Action: {{}}, Reward: 0.0")
         print(f"[END] Score: 0.0")
@@ -237,18 +225,20 @@ def run_task(task_id: str) -> float:
         step_num = i + 1
 
         # Try LLM first, fallback to heuristic
-        action = _call_llm(task_id, obs)
-        if action is None:
-            action = _fallback_action(task_id, obs)
+        action_dict = _call_llm(task_id, obs)
+        if action_dict is None:
+            action_dict = _fallback_action(task_id, obs)
 
-        action_json_str = json.dumps(action)
+        action_json_str = json.dumps(action_dict)
 
         try:
-            # OpenEnv framework expects {"action": {...}}
-            step_resp = _env_request("POST", "/step", json_data={"action": action})
-            obs = step_resp.get("observation", step_resp)
-            reward = float(step_resp.get("reward", 0.0))
-            done = bool(step_resp.get("done", False))
+            from context_router.models import CacheAction
+            cache_action = CacheAction(**action_dict)
+            
+            step_resp = await env.step(cache_action)
+            obs = step_resp.observation.model_dump()
+            reward = float(step_resp.reward)
+            done = bool(step_resp.done)
         except Exception:
             reward = 0.0
             done = True
@@ -264,17 +254,27 @@ def run_task(task_id: str) -> float:
     return final_score
 
 
-def main() -> int:
+async def main() -> int:
     """Run all tasks and report scores."""
+    try:
+        from context_router.client import MyEnv
+    except ImportError:
+        import sys, os
+        sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+        from context_router.client import MyEnv
+
     all_scores: dict[str, float] = {}
+    env = MyEnv(ENV_SERVER_URL)
 
     for task_id in TASKS:
         try:
-            score = run_task(task_id)
+            score = await run_task(task_id, env)
             all_scores[task_id] = score
-        except Exception:
+        except Exception as e:
             print(f"[END] Score: 0.0")
             all_scores[task_id] = 0.0
+
+    await env.close()
 
     # Summary
     print("\n--- Final Scores ---")
@@ -285,4 +285,5 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    import asyncio
+    raise SystemExit(asyncio.run(main()))
