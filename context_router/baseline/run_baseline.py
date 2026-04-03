@@ -101,31 +101,101 @@ def _hard_priority_from_block(block: dict[str, Any]) -> int:
     return max(1, min(5, score))
 
 
+def _protected_ids_from_initial(blocks: list[dict[str, Any]]) -> set[int]:
+    protected: set[int] = set()
+    for block in blocks:
+        try:
+            block_id = int(block.get("block_id", -1))
+        except (TypeError, ValueError):
+            continue
+        if block_id < 0:
+            continue
+        block_type = str(block.get("block_type", ""))
+        attention = float(block.get("attention_score", 0.0))
+        if block_type == "system_prompt" or attention >= 0.55:
+            protected.add(block_id)
+    return protected
+
+
+def _choose_action(
+    task_id: str,
+    blocks: list[dict[str, Any]],
+    protected_ids: set[int],
+    utilization: float,
+) -> tuple[int, EvictionTactic]:
+    if not blocks:
+        return 0, EvictionTactic.RETAIN
+
+    block_map: dict[int, dict[str, Any]] = {}
+    for block in blocks:
+        try:
+            block_id = int(block.get("block_id", -1))
+        except (TypeError, ValueError):
+            continue
+        if block_id >= 0:
+            block_map[block_id] = block
+    if not block_map:
+        return 0, EvictionTactic.RETAIN
+
+    def ranking_key(block_id: int) -> tuple[float, int, int]:
+        block = block_map[block_id]
+        attention = float(block.get("attention_score", 0.0))
+        age = int(block.get("age", 0))
+        tokens = int(block.get("token_count", 0))
+        return (attention, -age, -tokens)
+
+    if task_id == "easy":
+        target = max(block_map.keys(), key=lambda block_id: int(block_map[block_id].get("token_count", 0)))
+        if utilization > 0.46:
+            return target, EvictionTactic.EVICT
+        return target, EvictionTactic.RETAIN
+
+    candidate_ids = [block_id for block_id in block_map if block_id not in protected_ids]
+    if utilization > 0.65 or not candidate_ids:
+        candidate_ids = list(block_map.keys())
+
+    target = min(candidate_ids, key=ranking_key)
+    target_tokens = int(block_map[target].get("token_count", 0))
+
+    if utilization > 0.80:
+        return target, EvictionTactic.EVICT
+    if utilization > 0.45:
+        if target_tokens >= 300:
+            return target, EvictionTactic.COMPRESS
+        return target, EvictionTactic.EVICT
+    return target, EvictionTactic.RETAIN
+
+
 async def run_task(base_url: str, task_id: str, env: MyEnv) -> float:
     try:
         step_result = await env.reset()
         obs = step_result.observation
         done = bool(step_result.done)
         trajectory: list[dict[str, Any]] = []
+        initial_blocks = _extract_blocks(obs)
+        protected_ids = _protected_ids_from_initial(initial_blocks)
 
-        for _ in range(50):
+        max_steps = 7 if task_id == "hard" else 50
+        for _ in range(max_steps):
             trajectory.append(_obs_to_dict(obs))
             if done:
                 break
 
             blocks = _extract_blocks(obs)
-            if blocks:
-                target = int(blocks[0].get("block_id", 0))
-            else:
-                target = 0
-
-            if task_id == "easy":
-                tactic = EvictionTactic.EVICT
-            else:
-                tactic = EvictionTactic.COMPRESS
+            utilization = float(_obs_to_dict(obs).get("vram_utilization", 1.0))
+            target, tactic = _choose_action(task_id, blocks, protected_ids, utilization)
 
             if task_id == "hard" and blocks:
-                priority = _hard_priority_from_block(blocks[0])
+                selected = blocks[0]
+                for block in blocks:
+                    try:
+                        block_id = int(block.get("block_id", -1))
+                    except (TypeError, ValueError):
+                        continue
+                    if block_id == target:
+                        selected = block
+                        break
+                priority = _hard_priority_from_block(selected)
                 action = CacheAction(
                     target_block_id=target, tactic=tactic, priority=priority
                 )

@@ -1,9 +1,13 @@
 import logging
+import os
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any
 
 from openenv.core.env_server import create_app
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 try:
@@ -24,10 +28,31 @@ except (ImportError, ValueError):
 logger = logging.getLogger(__name__)
 SUPPORTED_TASKS = frozenset({"easy", "medium", "hard"})
 MAX_GRADER_TRAJECTORY_LEN = 512
+BASELINE_MAX_STEPS = {"easy": ContextRouterEnv.MAX_STEPS, "medium": ContextRouterEnv.MAX_STEPS, "hard": 7}
 
 
 # RULEBOOK PB1: pass the environment class, never an instance.
 app = create_app(ContextRouterEnv, CacheAction, CacheObservation, env_name="context_router")
+
+# ── Dashboard: Mount static files ────────────────────────────────────────────
+STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+if STATIC_DIR.is_dir():
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+
+# ── Global exception handler (Task 4: prevent 500s) ─────────────────────────
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    logger.error("Unhandled exception on %s %s: %s", request.method, request.url.path, exc, exc_info=True)
+    return JSONResponse(
+        status_code=400,
+        content={
+            "error": "Bad request",
+            "message": str(exc),
+            "done": True,
+            "reward": 0.0,
+        },
+    )
 
 
 class GraderRequest(BaseModel):
@@ -42,6 +67,67 @@ class GraderRequest(BaseModel):
 @app.get("/tasks")
 def get_tasks() -> dict[str, list[dict[str, Any]]]:
     return {"tasks": list(TASKS.values())}
+
+
+# ── Dashboard endpoints ──────────────────────────────────────────────────────
+@app.get("/", response_class=HTMLResponse)
+def serve_dashboard():
+    index_file = STATIC_DIR / "index.html"
+    if index_file.is_file():
+        return FileResponse(str(index_file), media_type="text/html")
+    return HTMLResponse("<h1>Dashboard not found</h1>", status_code=404)
+
+
+@app.get("/dashboard/state")
+def dashboard_state() -> dict[str, Any]:
+    """Return current environment state for the live dashboard."""
+    try:
+        # Access the environment instance from the app state
+        env: ContextRouterEnv | None = getattr(app.state, "env", None)
+        if env is None:
+            return {
+                "vram_utilization": 0.0,
+                "incoming_tokens": 0,
+                "memory_blocks": [],
+                "oom_triggered": False,
+                "message": "Environment not initialized. Call /reset first.",
+                "step_count": 0,
+                "episode_id": "",
+                "task_name": "",
+            }
+
+        total = sum(b.token_count for b in env._blocks.values())
+        return {
+            "vram_utilization": max(0.0, min(1.0, total / max(1, env._max_capacity))),
+            "incoming_tokens": env._incoming_tokens,
+            "memory_blocks": [
+                {
+                    "block_id": b.block_id,
+                    "block_type": b.block_type,
+                    "attention_score": b.attention_score,
+                    "token_count": b.token_count,
+                    "age": b.age,
+                }
+                for b in env._blocks.values()
+            ],
+            "oom_triggered": False,
+            "message": getattr(env, "_last_message", ""),
+            "step_count": env._state.step_count,
+            "episode_id": env._state.episode_id,
+            "task_name": env._current_task,
+        }
+    except Exception as e:
+        logger.error("dashboard_state error: %s", e, exc_info=True)
+        return {
+            "vram_utilization": 0.0,
+            "incoming_tokens": 0,
+            "memory_blocks": [],
+            "oom_triggered": False,
+            "message": f"Error: {e}",
+            "step_count": 0,
+            "episode_id": "",
+            "task_name": "",
+        }
 
 
 def _to_observation(item: Any) -> CacheObservation:
@@ -113,7 +199,7 @@ def _run_baseline_episode(task_name: str) -> float:
     protected_ids = _protected_block_ids(initial_blocks)
     trajectory: list[CacheObservation] = []
 
-    for _ in range(ContextRouterEnv.MAX_STEPS):
+    for _ in range(BASELINE_MAX_STEPS[task_name]):
         if not env._blocks:
             break
 
@@ -152,7 +238,7 @@ def _protected_block_ids(blocks: list[Any]) -> set[int]:
         attention = float(getattr(block, "attention_score", 0.0))
         if block_id < 0:
             continue
-        if block_type in {"system_prompt", "code_snippet"} or attention >= 0.6:
+        if block_type == "system_prompt" or attention >= 0.55:
             protected_ids.add(block_id)
     return protected_ids
 
@@ -165,10 +251,6 @@ def _baseline_action_for_state(
     utilization: float,
 ) -> tuple[int, EvictionTactic]:
     all_ids = set(blocks.keys())
-    candidate_ids = [block_id for block_id in all_ids if block_id not in protected_ids]
-    if not candidate_ids:
-        candidate_ids = list(all_ids)
-
     def ranking_key(block_id: int) -> tuple[float, int, int]:
         block = blocks[block_id]
         attention = float(getattr(block, "attention_score", 0.0))
@@ -176,21 +258,26 @@ def _baseline_action_for_state(
         tokens = int(getattr(block, "token_count", 0))
         return (attention, -age, -tokens)
 
+    if task_name == "easy":
+        target_block_id = max(all_ids, key=lambda block_id: int(getattr(blocks[block_id], "token_count", 0)))
+        if utilization > 0.46:
+            return target_block_id, EvictionTactic.EVICT
+        return target_block_id, EvictionTactic.RETAIN
+
+    candidate_ids = [block_id for block_id in all_ids if block_id not in protected_ids]
+    if utilization > 0.65 or not candidate_ids:
+        candidate_ids = list(all_ids)
+
     target_block_id = min(candidate_ids, key=ranking_key)
     target_block = blocks[target_block_id]
     target_tokens = int(getattr(target_block, "token_count", 0))
 
-    if task_name == "easy":
-        if utilization > 0.55:
-            return target_block_id, EvictionTactic.EVICT
-        return target_block_id, EvictionTactic.RETAIN
-
-    if utilization > 0.72:
-        if target_tokens >= 260:
+    if utilization > 0.80:
+        return target_block_id, EvictionTactic.EVICT
+    if utilization > 0.45:
+        if target_tokens >= 300:
             return target_block_id, EvictionTactic.COMPRESS
         return target_block_id, EvictionTactic.EVICT
-    if utilization > 0.55:
-        return target_block_id, EvictionTactic.COMPRESS
     return target_block_id, EvictionTactic.RETAIN
 
 

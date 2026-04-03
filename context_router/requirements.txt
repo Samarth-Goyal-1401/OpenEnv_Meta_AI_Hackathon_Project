@@ -7,4 +7,5 @@ pyyaml>=6.0.0
 requests>=2.31.0
 python-dotenv>=1.0.0
 typing-extensions>=4.8.0
+openai>=1.0.0
 # Note: Rulebook S3 prefers pyproject.toml and 'uv sync'

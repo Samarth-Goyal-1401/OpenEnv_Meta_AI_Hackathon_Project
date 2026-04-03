@@ -1,0 +1,856 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Edge GPU Context Router — Live Dashboard</title>
+    <meta name="description" content="Real-time visualization of VRAM/KV-Cache pressure during local LLM inference on edge GPUs.">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-primary: #0a0e1a;
+            --bg-secondary: #111827;
+            --bg-card: rgba(17, 24, 39, 0.8);
+            --border: rgba(75, 85, 99, 0.4);
+            --text-primary: #f9fafb;
+            --text-secondary: #9ca3af;
+            --text-dim: #6b7280;
+            --accent-blue: #3b82f6;
+            --accent-cyan: #06b6d4;
+            --accent-purple: #8b5cf6;
+            --accent-green: #10b981;
+            --accent-yellow: #f59e0b;
+            --accent-red: #ef4444;
+            --accent-orange: #f97316;
+            --glass-bg: rgba(255, 255, 255, 0.03);
+            --glass-border: rgba(255, 255, 255, 0.08);
+            --shadow-glow: 0 0 60px rgba(59, 130, 246, 0.1);
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        /* Animated background grid */
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background:
+                linear-gradient(rgba(59, 130, 246, 0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(59, 130, 246, 0.03) 1px, transparent 1px);
+            background-size: 60px 60px;
+            animation: gridShift 20s linear infinite;
+            z-index: 0;
+            pointer-events: none;
+        }
+
+        @keyframes gridShift {
+            0% { transform: translate(0, 0); }
+            100% { transform: translate(60px, 60px); }
+        }
+
+        /* Header */
+        .header {
+            position: relative;
+            z-index: 10;
+            padding: 1.5rem 2rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 1px solid var(--glass-border);
+            backdrop-filter: blur(20px);
+            background: rgba(10, 14, 26, 0.9);
+        }
+
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .logo {
+            width: 40px;
+            height: 40px;
+            border-radius: 10px;
+            background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.2rem;
+            font-weight: 700;
+            box-shadow: 0 4px 20px rgba(59, 130, 246, 0.3);
+        }
+
+        .header h1 {
+            font-size: 1.3rem;
+            font-weight: 600;
+            background: linear-gradient(135deg, var(--text-primary), var(--accent-cyan));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .header h1 span {
+            font-weight: 300;
+            opacity: 0.7;
+        }
+
+        .status-badge {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.4rem 1rem;
+            border-radius: 20px;
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            font-size: 0.8rem;
+            font-weight: 500;
+            color: var(--text-secondary);
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--accent-green);
+            animation: pulse 2s ease-in-out infinite;
+        }
+
+        .status-dot.disconnected {
+            background: var(--accent-red);
+            animation: none;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4); }
+            50% { opacity: 0.7; box-shadow: 0 0 0 6px rgba(16, 185, 129, 0); }
+        }
+
+        /* Main Layout */
+        .dashboard {
+            position: relative;
+            z-index: 10;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            grid-template-rows: auto 1fr;
+            gap: 1.5rem;
+            padding: 1.5rem 2rem;
+            max-width: 1600px;
+            margin: 0 auto;
+            min-height: calc(100vh - 80px);
+        }
+
+        /* Cards */
+        .card {
+            background: var(--bg-card);
+            border: 1px solid var(--glass-border);
+            border-radius: 16px;
+            padding: 1.5rem;
+            backdrop-filter: blur(10px);
+            box-shadow: var(--shadow-glow);
+            transition: border-color 0.3s ease;
+        }
+
+        .card:hover {
+            border-color: rgba(59, 130, 246, 0.2);
+        }
+
+        .card-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 1.25rem;
+        }
+
+        .card-title {
+            font-size: 0.85rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-secondary);
+        }
+
+        .card-tag {
+            font-size: 0.7rem;
+            padding: 0.2rem 0.6rem;
+            border-radius: 8px;
+            background: rgba(59, 130, 246, 0.1);
+            color: var(--accent-blue);
+            font-weight: 500;
+        }
+
+        /* VRAM Section */
+        .vram-section { grid-column: 1 / -1; }
+
+        .vram-display {
+            display: flex;
+            align-items: center;
+            gap: 2rem;
+        }
+
+        .vram-value {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 3.5rem;
+            font-weight: 700;
+            line-height: 1;
+            min-width: 180px;
+            transition: color 0.5s ease;
+        }
+
+        .vram-value.low { color: var(--accent-green); }
+        .vram-value.medium { color: var(--accent-yellow); }
+        .vram-value.high { color: var(--accent-orange); }
+        .vram-value.critical { color: var(--accent-red); }
+
+        .vram-bar-container {
+            flex: 1;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 12px;
+            height: 40px;
+            overflow: hidden;
+            position: relative;
+            border: 1px solid var(--glass-border);
+        }
+
+        .vram-bar {
+            height: 100%;
+            border-radius: 12px;
+            transition: width 0.8s cubic-bezier(0.4, 0, 0.2, 1), background 0.5s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .vram-bar.low { background: linear-gradient(90deg, #059669, #10b981); }
+        .vram-bar.medium { background: linear-gradient(90deg, #d97706, #f59e0b); }
+        .vram-bar.high { background: linear-gradient(90deg, #ea580c, #f97316); }
+        .vram-bar.critical {
+            background: linear-gradient(90deg, #dc2626, #ef4444);
+            animation: criticalPulse 1s ease-in-out infinite;
+        }
+
+        .vram-bar::after {
+            content: '';
+            position: absolute;
+            top: 0; left: -100%; right: 0; bottom: 0;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.15), transparent);
+            animation: shimmer 2s ease-in-out infinite;
+        }
+
+        @keyframes shimmer {
+            0% { left: -100%; }
+            100% { left: 100%; }
+        }
+
+        @keyframes criticalPulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+
+        .vram-stats {
+            display: flex;
+            gap: 2rem;
+            margin-top: 1rem;
+        }
+
+        .stat-item {
+            display: flex;
+            flex-direction: column;
+            gap: 0.25rem;
+        }
+
+        .stat-label {
+            font-size: 0.75rem;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .stat-value {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        /* Memory Blocks */
+        .blocks-section {
+            overflow-y: auto;
+            max-height: 500px;
+        }
+
+        .blocks-grid {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+
+        .memory-block {
+            display: grid;
+            grid-template-columns: 50px 1fr 80px 70px 50px;
+            align-items: center;
+            gap: 0.75rem;
+            padding: 0.75rem 1rem;
+            border-radius: 10px;
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            transition: all 0.4s ease;
+            font-size: 0.85rem;
+        }
+
+        .memory-block.evicting {
+            animation: evictBlock 0.6s ease-out forwards;
+        }
+
+        @keyframes evictBlock {
+            0% { opacity: 1; transform: translateX(0) scale(1); background: rgba(239, 68, 68, 0.1); }
+            50% { opacity: 0.5; transform: translateX(20px) scale(0.98); background: rgba(239, 68, 68, 0.3); }
+            100% { opacity: 0; transform: translateX(60px) scale(0.95); height: 0; padding: 0; margin: 0; border: none; }
+        }
+
+        .block-id {
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 600;
+            color: var(--accent-cyan);
+            font-size: 0.8rem;
+        }
+
+        .block-type-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+            padding: 0.2rem 0.6rem;
+            border-radius: 6px;
+            font-size: 0.75rem;
+            font-weight: 500;
+            white-space: nowrap;
+        }
+
+        .block-type-badge.system_prompt {
+            background: rgba(239, 68, 68, 0.15);
+            color: #fca5a5;
+            border: 1px solid rgba(239, 68, 68, 0.3);
+        }
+
+        .block-type-badge.code_snippet {
+            background: rgba(139, 92, 246, 0.15);
+            color: #c4b5fd;
+            border: 1px solid rgba(139, 92, 246, 0.3);
+        }
+
+        .block-type-badge.user_query {
+            background: rgba(59, 130, 246, 0.15);
+            color: #93c5fd;
+            border: 1px solid rgba(59, 130, 246, 0.3);
+        }
+
+        .block-type-badge.small_talk {
+            background: rgba(107, 114, 128, 0.15);
+            color: #d1d5db;
+            border: 1px solid rgba(107, 114, 128, 0.3);
+        }
+
+        .block-type-badge.rag_context {
+            background: rgba(16, 185, 129, 0.15);
+            color: #6ee7b7;
+            border: 1px solid rgba(16, 185, 129, 0.3);
+        }
+
+        .block-type-badge.assistant_response {
+            background: rgba(6, 182, 212, 0.15);
+            color: #67e8f9;
+            border: 1px solid rgba(6, 182, 212, 0.3);
+        }
+
+        .block-type-badge.priority_spill {
+            background: rgba(249, 115, 22, 0.15);
+            color: #fdba74;
+            border: 1px solid rgba(249, 115, 22, 0.3);
+        }
+
+        .block-tokens {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            text-align: right;
+        }
+
+        .block-attention {
+            position: relative;
+            height: 6px;
+            background: rgba(255,255,255,0.08);
+            border-radius: 3px;
+            overflow: hidden;
+        }
+
+        .block-attention-fill {
+            height: 100%;
+            border-radius: 3px;
+            transition: width 0.5s ease;
+        }
+
+        .block-age {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.75rem;
+            color: var(--text-dim);
+            text-align: center;
+        }
+
+        /* Activity Log */
+        .log-section {
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .log-container {
+            flex: 1;
+            overflow-y: auto;
+            max-height: 500px;
+            display: flex;
+            flex-direction: column;
+            gap: 0.35rem;
+        }
+
+        .log-entry {
+            display: flex;
+            align-items: flex-start;
+            gap: 0.75rem;
+            padding: 0.6rem 0.8rem;
+            border-radius: 8px;
+            background: var(--glass-bg);
+            border-left: 3px solid var(--glass-border);
+            animation: logSlideIn 0.3s ease-out;
+            font-size: 0.8rem;
+            line-height: 1.4;
+        }
+
+        @keyframes logSlideIn {
+            0% { opacity: 0; transform: translateY(-10px); }
+            100% { opacity: 1; transform: translateY(0); }
+        }
+
+        .log-entry.evict { border-left-color: var(--accent-red); }
+        .log-entry.retain { border-left-color: var(--accent-green); }
+        .log-entry.compress { border-left-color: var(--accent-yellow); }
+        .log-entry.error { border-left-color: var(--accent-orange); }
+        .log-entry.hallucination {
+            border-left-color: var(--accent-purple);
+            background: rgba(139, 92, 246, 0.08);
+        }
+        .log-entry.system {
+            border-left-color: var(--accent-cyan);
+            background: rgba(6, 182, 212, 0.05);
+        }
+
+        .log-time {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.7rem;
+            color: var(--text-dim);
+            white-space: nowrap;
+            min-width: 55px;
+        }
+
+        .log-text {
+            color: var(--text-secondary);
+            flex: 1;
+        }
+
+        .log-text strong {
+            color: var(--text-primary);
+            font-weight: 600;
+        }
+
+        /* Controls */
+        .controls {
+            display: flex;
+            gap: 0.75rem;
+            margin-top: 1rem;
+        }
+
+        .btn {
+            padding: 0.6rem 1.2rem;
+            border: 1px solid var(--glass-border);
+            border-radius: 10px;
+            background: var(--glass-bg);
+            color: var(--text-primary);
+            font-family: 'Inter', sans-serif;
+            font-size: 0.8rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .btn:hover {
+            background: rgba(59, 130, 246, 0.1);
+            border-color: var(--accent-blue);
+        }
+
+        .btn.primary {
+            background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+            border: none;
+            box-shadow: 0 4px 15px rgba(59, 130, 246, 0.2);
+        }
+
+        .btn.primary:hover {
+            box-shadow: 0 4px 25px rgba(59, 130, 246, 0.4);
+            transform: translateY(-1px);
+        }
+
+        .btn.danger {
+            border-color: rgba(239, 68, 68, 0.3);
+        }
+
+        .btn.danger:hover {
+            background: rgba(239, 68, 68, 0.1);
+            border-color: var(--accent-red);
+        }
+
+        /* Empty State */
+        .empty-state {
+            text-align: center;
+            padding: 3rem;
+            color: var(--text-dim);
+        }
+
+        .empty-state .icon {
+            font-size: 3rem;
+            margin-bottom: 1rem;
+            opacity: 0.5;
+        }
+
+        .empty-state p {
+            font-size: 0.9rem;
+        }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
+
+        /* Responsive */
+        @media (max-width: 1024px) {
+            .dashboard {
+                grid-template-columns: 1fr;
+                padding: 1rem;
+            }
+            .vram-display { flex-direction: column; gap: 1rem; }
+            .vram-value { font-size: 2.5rem; min-width: auto; }
+        }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <div class="header-left">
+            <div class="logo">⚡</div>
+            <h1>Edge GPU Context Router <span>| Live Dashboard</span></h1>
+        </div>
+        <div class="status-badge" id="statusBadge">
+            <div class="status-dot" id="statusDot"></div>
+            <span id="statusText">Connecting...</span>
+        </div>
+    </header>
+
+    <main class="dashboard">
+        <!-- VRAM Utilization -->
+        <section class="card vram-section" id="vramCard">
+            <div class="card-header">
+                <span class="card-title">VRAM Utilisation</span>
+                <span class="card-tag" id="taskBadge">—</span>
+            </div>
+            <div class="vram-display">
+                <div class="vram-value low" id="vramValue">0.00%</div>
+                <div class="vram-bar-container">
+                    <div class="vram-bar low" id="vramBar" style="width: 0%"></div>
+                </div>
+            </div>
+            <div class="vram-stats">
+                <div class="stat-item">
+                    <span class="stat-label">Total Tokens</span>
+                    <span class="stat-value" id="totalTokens">0</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Incoming</span>
+                    <span class="stat-value" id="incomingTokens">0</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Blocks</span>
+                    <span class="stat-value" id="blockCount">0</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Step</span>
+                    <span class="stat-value" id="stepCount">0</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Episode</span>
+                    <span class="stat-value" id="episodeId" style="font-size: 0.75rem;">—</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- Memory Blocks -->
+        <section class="card blocks-section">
+            <div class="card-header">
+                <span class="card-title">Memory Block Stack</span>
+                <span class="card-tag" id="oomBadge" style="display:none; background: rgba(239,68,68,0.2); color: #ef4444;">OOM</span>
+            </div>
+            <div class="blocks-grid" id="blocksGrid">
+                <div class="empty-state">
+                    <div class="icon">🧠</div>
+                    <p>No blocks loaded. Reset the environment to begin.</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- Activity Log -->
+        <section class="card log-section">
+            <div class="card-header">
+                <span class="card-title">Agent Activity Log</span>
+                <span class="card-tag" id="logCount">0 entries</span>
+            </div>
+            <div class="log-container" id="logContainer">
+                <div class="empty-state">
+                    <div class="icon">📋</div>
+                    <p>Waiting for agent actions...</p>
+                </div>
+            </div>
+            <div class="controls">
+                <button class="btn primary" onclick="resetEnv()">⟲ Reset Env</button>
+                <button class="btn" onclick="clearLogs()">🗑 Clear Log</button>
+                <button class="btn" id="pollToggle" onclick="togglePolling()">⏸ Pause</button>
+            </div>
+        </section>
+    </main>
+
+    <script>
+        // ── State ────────────────────────────────────────────────────────────
+        let polling = true;
+        let pollInterval = null;
+        let logs = [];
+        let previousBlockIds = new Set();
+        let lastStepCount = -1;
+
+        const POLL_MS = 800;
+
+        // ── DOM Elements ─────────────────────────────────────────────────────
+        const vramValue = document.getElementById('vramValue');
+        const vramBar = document.getElementById('vramBar');
+        const totalTokens = document.getElementById('totalTokens');
+        const incomingTokens = document.getElementById('incomingTokens');
+        const blockCount = document.getElementById('blockCount');
+        const stepCount = document.getElementById('stepCount');
+        const episodeId = document.getElementById('episodeId');
+        const taskBadge = document.getElementById('taskBadge');
+        const oomBadge = document.getElementById('oomBadge');
+        const blocksGrid = document.getElementById('blocksGrid');
+        const logContainer = document.getElementById('logContainer');
+        const logCount = document.getElementById('logCount');
+        const statusDot = document.getElementById('statusDot');
+        const statusText = document.getElementById('statusText');
+
+        // ── Utilities ────────────────────────────────────────────────────────
+        function vramClass(v) {
+            if (v < 0.4) return 'low';
+            if (v < 0.65) return 'medium';
+            if (v < 0.85) return 'high';
+            return 'critical';
+        }
+
+        function attentionColor(a) {
+            if (a >= 0.7) return '#10b981';
+            if (a >= 0.4) return '#f59e0b';
+            return '#ef4444';
+        }
+
+        function timeStr() {
+            const d = new Date();
+            return d.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        }
+
+        function addLog(text, type = 'system') {
+            logs.unshift({ time: timeStr(), text, type });
+            if (logs.length > 200) logs.pop();
+            renderLogs();
+        }
+
+        // ── Render ───────────────────────────────────────────────────────────
+        function renderLogs() {
+            logContainer.innerHTML = logs.map(l =>
+                `<div class="log-entry ${l.type}">
+                    <span class="log-time">${l.time}</span>
+                    <span class="log-text">${l.text}</span>
+                </div>`
+            ).join('');
+            logCount.textContent = `${logs.length} entries`;
+        }
+
+        function renderBlocks(blocks) {
+            if (!blocks || blocks.length === 0) {
+                blocksGrid.innerHTML = '<div class="empty-state"><div class="icon">🧠</div><p>No blocks in memory.</p></div>';
+                return;
+            }
+
+            const currentIds = new Set(blocks.map(b => b.block_id));
+
+            // Detect evicted blocks
+            for (const prevId of previousBlockIds) {
+                if (!currentIds.has(prevId)) {
+                    // Find the old element and animate it if it still exists
+                    const el = document.querySelector(`[data-block-id="${prevId}"]`);
+                    if (el) el.classList.add('evicting');
+                }
+            }
+
+            // Sort blocks: system_prompt first, then by block_id
+            const sorted = [...blocks].sort((a, b) => {
+                if (a.block_type === 'system_prompt') return -1;
+                if (b.block_type === 'system_prompt') return 1;
+                return a.block_id - b.block_id;
+            });
+
+            blocksGrid.innerHTML = sorted.map(b => {
+                const typeClass = b.block_type.replace(/\s+/g, '_');
+                const attnPct = (b.attention_score * 100).toFixed(0);
+                const attnClr = attentionColor(b.attention_score);
+                const isNew = !previousBlockIds.has(b.block_id);
+                const animClass = isNew && previousBlockIds.size > 0 ? 'style="animation: logSlideIn 0.3s ease-out"' : '';
+
+                return `<div class="memory-block" data-block-id="${b.block_id}" ${animClass}>
+                    <span class="block-id">#${b.block_id}</span>
+                    <span class="block-type-badge ${typeClass}">${b.block_type}</span>
+                    <span class="block-tokens">${b.token_count.toLocaleString()} tok</span>
+                    <div class="block-attention">
+                        <div class="block-attention-fill" style="width:${attnPct}%; background:${attnClr}"></div>
+                    </div>
+                    <span class="block-age">⏱${b.age}</span>
+                </div>`;
+            }).join('');
+
+            previousBlockIds = currentIds;
+        }
+
+        function updateDashboard(data) {
+            if (!data) return;
+
+            const vram = data.vram_utilization || 0;
+            const cls = vramClass(vram);
+
+            // VRAM display
+            vramValue.textContent = (vram * 100).toFixed(1) + '%';
+            vramValue.className = 'vram-value ' + cls;
+            vramBar.style.width = (vram * 100) + '%';
+            vramBar.className = 'vram-bar ' + cls;
+
+            // Stats
+            const blocks = data.memory_blocks || [];
+            const total = blocks.reduce((s, b) => s + (b.token_count || 0), 0);
+            totalTokens.textContent = total.toLocaleString();
+            incomingTokens.textContent = (data.incoming_tokens || 0).toLocaleString();
+            blockCount.textContent = blocks.length;
+
+            if (data.step_count !== undefined) {
+                stepCount.textContent = data.step_count;
+            }
+            if (data.episode_id) {
+                episodeId.textContent = data.episode_id.substring(0, 8) + '…';
+            }
+            if (data.task_name) {
+                taskBadge.textContent = data.task_name.toUpperCase();
+            }
+
+            // OOM badge
+            if (data.oom_triggered) {
+                oomBadge.style.display = 'inline-block';
+            } else {
+                oomBadge.style.display = 'none';
+            }
+
+            // Detect new step and log the message
+            if (data.step_count !== undefined && data.step_count !== lastStepCount) {
+                lastStepCount = data.step_count;
+                if (data.message) {
+                    let logType = 'system';
+                    const msg = data.message.toLowerCase();
+                    if (msg.includes('evict')) logType = 'evict';
+                    else if (msg.includes('retain')) logType = 'retain';
+                    else if (msg.includes('compress')) logType = 'compress';
+                    else if (msg.includes('hallucination')) logType = 'hallucination';
+                    else if (msg.includes('error') || msg.includes('oom')) logType = 'error';
+
+                    addLog(`<strong>Step ${data.step_count}:</strong> ${data.message}`, logType);
+                }
+            }
+
+            // Render blocks
+            renderBlocks(blocks);
+        }
+
+        // ── Polling ──────────────────────────────────────────────────────────
+        async function fetchState() {
+            try {
+                const resp = await fetch('/dashboard/state');
+                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                const data = await resp.json();
+                updateDashboard(data);
+                statusDot.className = 'status-dot';
+                statusText.textContent = 'Connected';
+            } catch (e) {
+                statusDot.className = 'status-dot disconnected';
+                statusText.textContent = 'Disconnected';
+            }
+        }
+
+        function startPolling() {
+            if (pollInterval) clearInterval(pollInterval);
+            pollInterval = setInterval(fetchState, POLL_MS);
+            fetchState();
+        }
+
+        function togglePolling() {
+            const btn = document.getElementById('pollToggle');
+            if (polling) {
+                clearInterval(pollInterval);
+                pollInterval = null;
+                btn.textContent = '▶ Resume';
+                polling = false;
+            } else {
+                startPolling();
+                btn.textContent = '⏸ Pause';
+                polling = true;
+            }
+        }
+
+        // ── Actions ──────────────────────────────────────────────────────────
+        async function resetEnv() {
+            try {
+                const resp = await fetch('/reset', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+                const data = await resp.json();
+                previousBlockIds = new Set();
+                lastStepCount = -1;
+                addLog('<strong>Environment Reset</strong> — New episode started.', 'system');
+                fetchState();
+            } catch (e) {
+                addLog(`<strong>Reset Failed:</strong> ${e.message}`, 'error');
+            }
+        }
+
+        function clearLogs() {
+            logs = [];
+            renderLogs();
+        }
+
+        // ── Init ─────────────────────────────────────────────────────────────
+        addLog('Dashboard initialized. Connecting to server...', 'system');
+        startPolling();
+    </script>
+</body>
+</html>

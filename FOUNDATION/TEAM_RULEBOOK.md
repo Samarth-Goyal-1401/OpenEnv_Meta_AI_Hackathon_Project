@@ -313,6 +313,18 @@ def step(self, action):
 # FORBIDDEN: grader raising exception (must return 0.0 instead)
 def grader_easy(trajectory):
     # ... raises ValueError on malformed input (must catch and return 0.0)
+
+# FORBIDDEN: nested infra files (Hackathon Criteria)
+# Dockerfile, openenv.yaml, and inference.py MUST be at the repo root
+# Never hide them in subfolders like hf_deployment/
+
+# FORBIDDEN: ignoring LLM requirement in inference.py (Hackathon Criteria)
+import httpx # WRONG — inference.py must use official OpenAI Client
+# Must rely on API_BASE_URL, MODEL_NAME, and HF_TOKEN
+
+# FORBIDDEN: missing stdout markers in inference.py (Hackathon Criteria)
+print("done") # WRONG
+# Must STRICTLY use [START], [STEP], and [END] markers in stdout
 ```
 
 ---

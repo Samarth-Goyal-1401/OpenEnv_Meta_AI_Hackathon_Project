@@ -14,6 +14,11 @@ _These checks are run automatically by scripts. If they fail, humans will never 
 - [ ] `reset()` called on your live Space returns a valid JSON `Observation`.
 - [ ] Docker builds successfully (`openenv build`).
 - [ ] `openenv.yaml` exists at the root, is valid, and matches your python types.
+- [ ] `Dockerfile` exists at the root (no `hf_deployment` subdirectories).
+- [ ] `inference.py` exists at the root.
+- [ ] `inference.py` uses the standard OpenAI Client for all LLM calls.
+- [ ] `inference.py` relies solely on `API_BASE_URL`, `MODEL_NAME`, and `HF_TOKEN` environment variables.
+- [ ] `inference.py` stdout formatting exactly matches the `[START]`, `[STEP]`, `[END]` required tags.
 - [ ] Target domain is **NOT** a classic game (no Chess, Tic-Tac-Toe, Snake).
 
 ## 🔲 2. The Golden Ratio (The 3 Tasks)

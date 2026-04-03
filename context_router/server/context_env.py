@@ -101,6 +101,12 @@ class ContextRouterEnv(Environment):
         self._incoming_tokens: int = 0
         self._compressed_ids: set[int] = set()
         self._initial_code_block_count: int = 0
+        # Delayed penalty state (Task 3)
+        self._critical_block_ids: set[int] = set()
+        self._delayed_penalty_queue: list[tuple[int, int]] = []  # (trigger_step, block_id)
+        # Dashboard state tracking
+        self._last_message: str = ""
+        self._last_reward: float = 0.0
 
     # ── Public API for Dev 2 ──────────────────────────────────────────────
 
@@ -134,8 +140,21 @@ class ContextRouterEnv(Environment):
         self._blocks = {}
         self._next_block_id = 0
         self._compressed_ids = set()
+        self._delayed_penalty_queue = []
+        self._critical_block_ids = set()
 
         self._generate_initial_blocks(config)
+
+        # Task 3: Mark 1-2 system_prompt blocks as hidden-critical
+        system_block_ids = [
+            bid for bid, b in self._blocks.items()
+            if b.block_type in ("system_prompt", "code_snippet")
+            and b.attention_score >= 0.6
+        ]
+        if system_block_ids:
+            num_critical = min(2, len(system_block_ids))
+            self._critical_block_ids = set(self._rng.sample(system_block_ids, num_critical))
+            logger.info("Critical blocks for this episode: %s", self._critical_block_ids)
 
         self._initial_code_block_count = sum(
             1 for b in self._blocks.values() if b.block_type == "code_snippet"
@@ -143,12 +162,14 @@ class ContextRouterEnv(Environment):
         self._incoming_tokens = self._rng.randint(*config["incoming_token_range"])
 
         total_tokens = self._total_tokens()
+        self._last_message = "Environment reset. Ready for first action."
+        self._last_reward = 0.0
         return CacheObservation(
             vram_utilization=self._clamp_util(total_tokens),
             incoming_tokens=self._incoming_tokens,
             memory_blocks=list(self._blocks.values()),
             oom_triggered=False,
-            message="Environment reset. Ready for first action.",
+            message=self._last_message,
             done=False,
             reward=0.0,
         )
@@ -176,11 +197,11 @@ class ContextRouterEnv(Environment):
                     message=f"Max steps ({self.MAX_STEPS}) reached.",
                 )
 
-            # ── Validate block_id ──
+            # ── Validate block_id (Task 4: fatal on invalid) ──
             if action.target_block_id not in self._blocks:
                 return self._obs(
-                    done=False, reward=0.0,
-                    message=f"Invalid block_id {action.target_block_id}. Step wasted.",
+                    done=True, reward=0.0,
+                    message="Invalid block_id selected. Fatal error.",
                 )
 
             # ── Validate tactic for easy task (no compress) ──
@@ -198,6 +219,19 @@ class ContextRouterEnv(Environment):
             if priority_msg:
                 msg += f" | {priority_msg}"
 
+            # ── 1b) Task 3: Check if evicted block was critical ──
+            if (action.tactic == EvictionTactic.EVICT
+                    and action.target_block_id in self._critical_block_ids):
+                trigger_step = self._state.step_count + 5
+                self._delayed_penalty_queue.append(
+                    (trigger_step, action.target_block_id)
+                )
+                logger.info(
+                    "Critical block %d evicted — hallucination queued for step %d",
+                    action.target_block_id, trigger_step,
+                )
+                # No immediate penalty — the agent won't know yet
+
             # ── 2) Attention decay ──
             self._apply_attention_decay()
 
@@ -210,6 +244,18 @@ class ContextRouterEnv(Environment):
             spike_msg = self._check_rag_spike()
             if spike_msg:
                 msg += f" | {spike_msg}"
+
+            # ── 4b) Task 3: Process delayed penalties ──
+            penalty_result = self._process_delayed_penalties()
+            if penalty_result:
+                penalty_msg, penalty_reward = penalty_result
+                msg += f" | {penalty_msg}"
+                # Force reward to 0 and spike incoming tokens
+                return self._obs(
+                    done=False,
+                    reward=0.0,
+                    message=msg,
+                )
 
             # ── 5) Generate next incoming tokens ──
             config = self.TASK_CONFIGS[self._current_task]
@@ -249,6 +295,8 @@ class ContextRouterEnv(Environment):
     def _obs(self, *, done: bool, reward: float, message: str,
              oom: bool = False) -> CacheObservation:
         total = self._total_tokens()
+        self._last_message = message
+        self._last_reward = float(max(0.0, min(1.0, reward)))
         return CacheObservation(
             vram_utilization=self._clamp_util(total),
             incoming_tokens=self._incoming_tokens,
@@ -256,7 +304,7 @@ class ContextRouterEnv(Environment):
             oom_triggered=oom,
             message=message,
             done=done,
-            reward=float(max(0.0, min(1.0, reward))),
+            reward=self._last_reward,
         )
 
     def _execute_tactic(self, action: CacheAction, block: MemoryBlockInfo) -> str:
@@ -409,6 +457,47 @@ class ContextRouterEnv(Environment):
 
         reward = 0.6 * critical_kept + 0.4 * vram_freed
         return float(max(0.0, min(1.0, reward)))
+
+    def _process_delayed_penalties(self) -> tuple[str, float] | None:
+        """Task 3: Fire delayed hallucination events when their trigger step arrives."""
+        if not self._delayed_penalty_queue:
+            return None
+
+        current_step = self._state.step_count
+        fired: list[int] = []
+        remaining: list[tuple[int, int]] = []
+
+        for trigger_step, block_id in self._delayed_penalty_queue:
+            if current_step >= trigger_step:
+                fired.append(block_id)
+            else:
+                remaining.append((trigger_step, block_id))
+
+        self._delayed_penalty_queue = remaining
+
+        if not fired:
+            return None
+
+        # HALLUCINATION event: spike incoming tokens to simulate runaway LLM
+        spike_tokens = 800
+        hallucination_block = MemoryBlockInfo(
+            block_id=self._next_block_id,
+            block_type="hallucination_spill",
+            attention_score=0.1,
+            token_count=spike_tokens,
+            age=0,
+        )
+        self._blocks[self._next_block_id] = hallucination_block
+        self._next_block_id += 1
+        self._incoming_tokens += spike_tokens
+
+        block_list = ", ".join(str(b) for b in fired)
+        msg = (
+            f"HALLUCINATION: Evicted critical block(s) [{block_list}] "
+            f"caused context loss! +{spike_tokens} token spike."
+        )
+        logger.warning(msg)
+        return msg, 0.0
 
     def _generate_initial_blocks(self, config: dict) -> None:
         num_blocks = config["num_initial_blocks"]
