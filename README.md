@@ -1,136 +1,90 @@
 # Edge GPU Context Router (OpenEnv Hackathon)
 
-An OpenEnv-compatible RL environment that simulates KV-cache / VRAM pressure during local LLM inference. The agent must decide what context to **evict**, **retain**, or **compress** to avoid OOM while preserving critical information like the `system_prompt` and `code_snippet`.
+An OpenEnv-compatible environment for KV-cache/VRAM management during local LLM inference.
+Agents choose when to `evict`, `retain`, or `compress` memory blocks to avoid OOM while preserving critical context.
 
-This repo was built for the Meta x OpenEnv hackathon. The actual environment lives in `context_router/`.
+## Highlights
 
-## What The Agent Controls
+- Deterministic multi-step control task (easy/medium/hard)
+- OpenEnv API compatible (`/reset`, `/step`, `/state`, `/schema`, `/metadata`, `/health`)
+- Built-in trajectory graders with partial credit
+- Baseline runner + test suite for reproducible validation
 
-At each step the agent selects:
+## Task Model
 
-- `target_block_id`: which memory block to operate on
-- `tactic`: `evict` | `retain` | `compress`
-- `priority` (hard task only): `1..5` (a signal that affects the simulation)
+Each step, the agent outputs:
 
-The observation includes:
+- `target_block_id`
+- `tactic` = `evict | retain | compress`
+- `priority` (hard mode only)
 
-- `vram_utilization` in `[0.0, 1.0]` (token-capacity proxy for VRAM/KV-cache)
-- `incoming_tokens` (new load arriving this step)
-- `memory_blocks`: each with `block_id`, `block_type`, `attention_score`, `token_count`, `age`
-- `oom_triggered`, `message`, and OpenEnv-inherited `done` / `reward`
+Observation includes:
 
-### Delayed Hallucination Penalties
-If the agent incorrectly evicts a critical "hidden" block (like `system_prompt` or core `user_query`), the environment activates a delayed penalty. Exactly 5 steps after the critical block is lost, a massive **HALLUCINATION_ERROR** block (+500 tokens) will be forcefully injected into the VRAM, typically cascading into an OOM state. This prevents short-term memorization models from gaming the grader.
+- `vram_utilization` in `[0.0, 1.0]`
+- `incoming_tokens`
+- `memory_blocks` (`block_id`, `block_type`, `attention_score`, `token_count`, `age`)
+- `oom_triggered`, `message`, `done`, `reward`
 
-## Tasks
+### Delayed Hallucination Penalty
 
-There are three deterministic task tiers:
+If critical hidden context is evicted, a delayed `HALLUCINATION_ERROR` spike can be injected after 5 steps.
+This discourages greedy short-horizon strategies.
 
-- **Easy**: reduce utilization below `0.5` without OOM using `evict|retain`
-- **Medium**: reduce below `0.4` while preserving critical blocks; `compress` is allowed
-- **Hard**: survive a longer horizon with stability, retention, priority mechanisms, and avoiding the 5-step delayed hallucination penalties.
+## Difficulty Tiers
 
-## Quickstart (Local)
+- **Easy**: reduce VRAM below `0.5` without OOM
+- **Medium**: reduce below `0.4` while retaining important blocks
+- **Hard**: long-horizon stability + retention + priority control
 
-From the repo root (`meta_hackathon`):
+## Local Quickstart (Windows)
 
-```bash
+```powershell
 python -m venv .venv
 .\.venv\Scripts\activate
 pip install -e .\context_router
 uvicorn context_router.server.app:app --host 0.0.0.0 --port 8000
 ```
 
-Then verify core endpoints:
+## Validate Locally
 
-```bash
+```powershell
 curl http://localhost:8000/health
 curl http://localhost:8000/tasks
 curl -X POST http://localhost:8000/baseline
-```
-
-## Validation (Judge-Style)
-
-Run tests:
-
-```bash
 .\.venv\Scripts\python.exe -m pytest context_router\tests -q
 ```
 
-Run the baseline script:
+Optional OpenEnv validation:
 
-```bash
-.\.venv\Scripts\python.exe context_router\baseline\run_baseline.py --base-url http://localhost:8000
-```
-
-Validate the running environment contract:
-
-```bash
+```powershell
 cd context_router
 openenv validate --url http://localhost:8000
 ```
 
-Example results (March 31, 2026):
+## Grading Notes
 
-```text
-pytest: 38 passed
-baseline: easy=1.0000 medium=0.3657 hard=0.3721
-openenv validate: passed=true (6/6 required checks)
+Current graders are bounded to keep scores safely below 1.00 formatting edge cases.
+The scoring interval is clamped to `[0.01, 0.98]`.
+
+Main grader files:
+
+- `context_router/graders/grader_easy.py`
+- `context_router/graders/grader_medium.py`
+- `context_router/graders/grader_hard.py`
+
+## Repository Layout
+
+- `context_router/` - primary environment implementation
+- `hf_deployment/` - deployment mirror for Hugging Face Space
+- `tests/` - additional repository-level checks
+- `inference.py` - root inference entrypoint
+- `push_to_hf.py` - HF Space deployment helper
+
+## Deployment
+
+GitHub remote is configured for this repo.
+Hugging Face Space deployment is handled from root via:
+
+```powershell
+.\.venv\Scripts\python.exe .\push_to_hf.py --wait --no-proxy
 ```
-
-## Scoring / Grading
-
-The graders return a float in `[0.0, 1.0]` with partial credit. In general:
-
-- **Easy** rewards reducing VRAM, surviving steps, and stability; penalizes OOM.
-- **Medium** adds explicit retention credit (keeping `system_prompt` and high-attention blocks).
-- **Hard** rewards survival, retention ratio, low average VRAM, and stability; penalizes OOM heavily.
-
-Implementation:
-
-- Environment: `context_router/server/context_env.py`
-- Graders: `context_router/graders/grader_easy.py`, `context_router/graders/grader_medium.py`, `context_router/graders/grader_hard.py`
-- Tasks metadata exposed at `/tasks`: `context_router/tasks/task_definitions.py`
-
-## API Surface
-
-Core OpenEnv endpoints (provided by `openenv-core` app wrapper):
-
-- `POST /reset`
-- `POST /step`
-- `GET /state`
-- `GET /schema`
-- `GET /metadata`
-- `GET /health`
-
-Project-specific endpoints:
-
-- `GET /` (Live interactive Visual Dashboard)
-- `GET /dashboard/state` (Real-time state polling)
-- `GET /tasks` (lists easy/medium/hard and their action schemas)
-- `POST /grader` (scores a submitted trajectory)
-- `POST /baseline` (runs an internal baseline policy and returns 3 scores)
-
-## Repo Layout
-
-- `context_router/`: primary environment implementation + tests
-- `hf_deployment/`: deployment-oriented copy used for Hugging Face Spaces (Docker/metadata)
-- `tests/`: miscellaneous verification scripts
-
-## Rubric Mapping (Why This Scores Well)
-
-- **Real-world utility**: models a real pain point in local LLM systems (KV-cache pressure and context management).
-- **Task/grader quality**: deterministic, reproducible graders with partial credit and clear success criteria.
-- **Environment design**: meaningful control problem with a non-trivial tradeoff: VRAM reduction vs retention of critical context.
-- **Code/spec compliance**: passes `openenv validate`, has baseline script and an API-contract smoke test suite.
-- **Creativity/novelty**: not another ticket-triage clone; focuses on inference-time systems behavior.
-
-## More Docs
-
-The Hugging Face Space card + environment-facing docs live here:
-
-- `context_router/README.md`
-
-Internal hackathon process docs (checklists, rulebooks, templates) live here:
-
-- `FOUNDATION/README.md`
