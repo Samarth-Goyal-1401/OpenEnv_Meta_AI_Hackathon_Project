@@ -1,289 +1,175 @@
 #!/usr/bin/env python3
-"""
-inference.py — Root-level LLM inference script for the Edge GPU Context Router.
-
-MANDATORY HACKATHON REQUIREMENTS:
-  1. Uses the official `openai` Python package.
-  2. Reads API_BASE_URL, MODEL_NAME, HF_TOKEN from environment.
-  3. Emits structured stdout logs: [START], [STEP], [END].
-  4. Falls back to heuristic action if LLM fails or times out.
-  5. Runtime < 20 minutes on vcpu=2, memory=8gb.
-"""
-
+import asyncio
 import json
 import os
-import random
-import sys
-import time
+from typing import Any, Optional
 
-import httpx
 from openai import OpenAI
 
-# ── Configuration ────────────────────────────────────────────────────────────
-API_BASE_URL = os.environ.get("API_BASE_URL", "https://api.openai.com/v1")
-MODEL_NAME = os.environ.get("MODEL_NAME", "gpt-3.5-turbo")
-HF_TOKEN = os.environ.get("HF_TOKEN", "")
+API_BASE_URL = os.getenv("API_BASE_URL", "https://api.openai.com/v1")
+MODEL_NAME = os.getenv("MODEL_NAME", "gpt-4o-mini")
+HF_TOKEN = os.getenv("HF_TOKEN")
+LOCAL_IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME")
 
-# Where our OpenEnv server is running
-ENV_SERVER_URL = os.environ.get("ENV_SERVER_URL", "http://localhost:8000")
+ENV_SERVER_URL = os.getenv("ENV_SERVER_URL", "http://localhost:8000")
+BENCHMARK = os.getenv("BENCHMARK", "context_router")
+TASKS = [t.strip() for t in os.getenv("TASKS", "easy,medium,hard").split(",") if t.strip()]
+MAX_STEPS = int(os.getenv("MAX_STEPS", "50"))
+SUCCESS_SCORE_THRESHOLD = float(os.getenv("SUCCESS_SCORE_THRESHOLD", "0.10"))
+LLM_TIMEOUT = float(os.getenv("LLM_TIMEOUT", "15"))
 
-# Timeouts
-LLM_TIMEOUT = 15  # seconds per LLM call
-MAX_STEPS_PER_TASK = 50
-TASKS = ["easy", "medium", "hard"]
-
-# ── OpenAI Client ────────────────────────────────────────────────────────────
-client = OpenAI(
-    base_url=API_BASE_URL,
-    api_key=HF_TOKEN or "no-key-provided",
+SYSTEM_PROMPT = (
+    "You are a KV-cache memory manager. Return JSON only with keys "
+    "target_block_id (int), tactic (evict|retain|compress), and optional priority (1-5)."
 )
 
-SYSTEM_PROMPT = """You are an expert Edge GPU memory manager. You manage KV-cache blocks for a local LLM running on limited VRAM.
 
-Given the current observation (JSON), you must decide which memory block to act on and what tactic to use.
-
-Available tactics:
-- "evict": Remove the block entirely, freeing its tokens.
-- "retain": Keep the block as-is.
-- "compress": Halve the block's token count (only for medium/hard tasks).
-
-Strategy:
-- Evict blocks with LOW attention_score and HIGH age first.
-- NEVER evict system_prompt blocks — they are critical.
-- If VRAM utilisation is high (>0.7), prefer evicting to free space.
-- If VRAM is moderate (0.4-0.7), compress large low-attention blocks.
-- If VRAM is low (<0.4), retain everything.
-
-Respond with ONLY a JSON object, no markdown, no explanation:
-{"target_block_id": <int>, "tactic": "<evict|retain|compress>", "priority": <int 1-5 or null>}
-"""
+def log_start(task: str, env: str, model: str) -> None:
+    print(f"[START] task={task} env={env} model={model}", flush=True)
 
 
-def _build_user_prompt(task_id: str, obs: dict) -> str:
-    """Build a user prompt from the observation."""
-    blocks_summary = []
-    for b in obs.get("memory_blocks", []):
-        blocks_summary.append(
-            f"  Block {b['block_id']}: type={b['block_type']}, "
-            f"attention={b['attention_score']:.3f}, "
-            f"tokens={b['token_count']}, age={b['age']}"
+def log_step(step: int, action: str, reward: float, done: bool, error: Optional[str]) -> None:
+    error_val = error if error else "null"
+    done_val = str(done).lower()
+    print(f"[STEP] step={step} action={action} reward={reward:.2f} done={done_val} error={error_val}", flush=True)
+
+
+def log_end(success: bool, steps: int, score: float, rewards: list[float]) -> None:
+    rewards_str = ",".join(f"{r:.2f}" for r in rewards)
+    print(f"[END] success={str(success).lower()} steps={steps} score={score:.2f} rewards={rewards_str}", flush=True)
+
+
+def _fallback_action(obs: dict[str, Any]) -> dict[str, Any]:
+    blocks = obs.get("memory_blocks", [])
+    if not blocks:
+        return {"target_block_id": 0, "tactic": "retain"}
+
+    def rank(block: dict[str, Any]) -> tuple[float, int, int]:
+        return (
+            float(block.get("attention_score", 0.0)),
+            -int(block.get("age", 0)),
+            -int(block.get("token_count", 0)),
         )
-    blocks_str = "\n".join(blocks_summary) if blocks_summary else "  (no blocks)"
 
-    return (
-        f"Task: {task_id}\n"
-        f"VRAM Utilisation: {obs.get('vram_utilization', 1.0):.3f}\n"
-        f"Incoming Tokens: {obs.get('incoming_tokens', 0)}\n"
-        f"OOM Triggered: {obs.get('oom_triggered', False)}\n"
-        f"Memory Blocks:\n{blocks_str}\n\n"
-        f"Return your action as JSON."
-    )
+    target = min(blocks, key=rank)
+    target_id = int(target.get("block_id", 0))
+    vram = float(obs.get("vram_utilization", 1.0))
+
+    tactic = "evict"
+    if vram < 0.40:
+        tactic = "retain"
+    elif int(target.get("token_count", 0)) >= 300 and vram >= 0.45:
+        tactic = "compress"
+    if target.get("block_type") == "system_prompt" and tactic == "evict":
+        tactic = "retain"
+
+    return {"target_block_id": target_id, "tactic": tactic}
 
 
-def _call_llm(task_id: str, obs: dict) -> dict | None:
-    """Call the LLM via OpenAI client. Returns parsed action dict or None on failure."""
+def _call_llm(client: OpenAI, obs: dict[str, Any]) -> Optional[dict[str, Any]]:
     try:
-        user_prompt = _build_user_prompt(task_id, obs)
-        response = client.chat.completions.create(
+        user_prompt = json.dumps(obs, separators=(",", ":"), ensure_ascii=True)
+        resp = client.chat.completions.create(
             model=MODEL_NAME,
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},
             ],
             temperature=0.1,
-            max_tokens=100,
             timeout=LLM_TIMEOUT,
+            response_format={"type": "json_object"},
         )
-        content = response.choices[0].message.content.strip()
-        # Strip markdown code fences if present
-        if content.startswith("```"):
-            content = content.split("\n", 1)[-1]
-            if content.endswith("```"):
-                content = content[:-3]
-            content = content.strip()
-
+        content = (resp.choices[0].message.content or "").strip()
         action = json.loads(content)
-
-        # Validate required fields
         if "target_block_id" not in action or "tactic" not in action:
             return None
-        if action["tactic"] not in ("evict", "retain", "compress"):
+        if action["tactic"] not in {"evict", "retain", "compress"}:
             return None
-        # Easy task: no compress allowed
-        if task_id == "easy" and action["tactic"] == "compress":
-            action["tactic"] = "evict"
-
+        action["target_block_id"] = int(action["target_block_id"])
+        if "priority" in action and action["priority"] is not None:
+            action["priority"] = int(action["priority"])
         return action
     except Exception:
         return None
 
 
-def _fallback_action(task_id: str, obs: dict) -> dict:
-    """Heuristic fallback when LLM fails — mirrors the baseline strategy."""
-    blocks = obs.get("memory_blocks", [])
-    if not blocks:
-        return {"target_block_id": 0, "tactic": "retain"}
+async def run_task(task_name: str, client: OpenAI) -> float:
+    env = None
+    rewards: list[float] = []
+    steps_taken = 0
+    score = 0.01
+    success = False
 
-    utilization = obs.get("vram_utilization", 1.0)
-
-    # Build block map
-    block_map = {}
-    for b in blocks:
-        try:
-            bid = int(b.get("block_id", -1))
-            if bid >= 0:
-                block_map[bid] = b
-        except (TypeError, ValueError):
-            continue
-
-    if not block_map:
-        return {"target_block_id": 0, "tactic": "retain"}
-
-    # Protect system_prompt and high-attention blocks
-    protected = set()
-    for bid, b in block_map.items():
-        if b.get("block_type") == "system_prompt" or float(b.get("attention_score", 0)) >= 0.55:
-            protected.add(bid)
-
-    if task_id == "easy":
-        # Evict the largest non-system block
-        target = max(
-            block_map.keys(),
-            key=lambda bid: int(block_map[bid].get("token_count", 0)),
-        )
-        tactic = "evict" if utilization > 0.46 else "retain"
-        return {"target_block_id": target, "tactic": tactic}
-
-    # Medium/Hard — ranking by lowest attention, highest age, most tokens
-    candidates = [bid for bid in block_map if bid not in protected]
-    if utilization > 0.65 or not candidates:
-        candidates = list(block_map.keys())
-
-    def rank(bid):
-        b = block_map[bid]
-        return (float(b.get("attention_score", 0)), -int(b.get("age", 0)), -int(b.get("token_count", 0)))
-
-    target = min(candidates, key=rank)
-    target_tokens = int(block_map[target].get("token_count", 0))
-
-    if utilization > 0.80:
-        tactic = "evict"
-    elif utilization > 0.45:
-        tactic = "compress" if target_tokens >= 300 else "evict"
-    else:
-        tactic = "retain"
-
-    action = {"target_block_id": target, "tactic": tactic}
-
-    # Hard task: compute priority
-    if task_id == "hard":
-        b = block_map[target]
-        score = 3
-        if b.get("block_type") in ("system_prompt", "code_snippet"):
-            score += 1
-        attn = float(b.get("attention_score", 0))
-        if attn >= 0.75:
-            score += 1
-        elif attn <= 0.25:
-            score -= 1
-        age = int(b.get("age", 0))
-        if age <= 2:
-            score += 1
-        elif age >= 12:
-            score -= 1
-        tc = int(b.get("token_count", 0))
-        if tc >= 700:
-            score += 1
-        elif tc <= 150:
-            score -= 1
-        action["priority"] = max(1, min(5, score))
-
-    return action
-
-
-async def run_task(task_id: str, env) -> float:
-    """Run one task episode and emit structured [START]/[STEP]/[END] logs."""
-    print(f"[START] Task: {task_id}")
+    log_start(task=task_name, env=BENCHMARK, model=MODEL_NAME)
 
     try:
-        # Reset the environment via persistent WebSocket
-        step_result = await env.reset()
-        obs = step_result.observation.model_dump()
-        done = step_result.done
-    except Exception as e:
-        print(f"[STEP] Step: 1, Action: {{}}, Reward: 0.0")
-        print(f"[END] Score: 0.01")
-        return 0.01
-
-    cumulative_reward = 0.0
-    step_num = 0
-
-    for i in range(MAX_STEPS_PER_TASK):
-        if done:
-            break
-
-        step_num = i + 1
-
-        # Try LLM first, fallback to heuristic
-        action_dict = _call_llm(task_id, obs)
-        if action_dict is None:
-            action_dict = _fallback_action(task_id, obs)
-
-        action_json_str = json.dumps(action_dict)
+        try:
+            from context_router.client import MyEnv
+            from context_router.models import CacheAction
+            env = MyEnv(ENV_SERVER_URL)
+        except ImportError:
+            return 0.01
 
         try:
-            from context_router.models import CacheAction
-            cache_action = CacheAction(**action_dict)
-            
-            step_resp = await env.step(cache_action)
-            obs = step_resp.observation.model_dump()
-            reward = float(step_resp.reward)
-            done = bool(step_resp.done)
+            result = await env.reset(task_name=task_name)
         except Exception:
+            try:
+                result = await env.reset()
+            except Exception:
+                log_step(step=1, action="{}", reward=0.00, done=True, error=None)
+                return 0.01
+
+        for step in range(1, MAX_STEPS + 1):
+            if bool(result.done):
+                break
+
+            obs = result.observation.model_dump()
+            action = _call_llm(client, obs) or _fallback_action(obs)
+            action_str = json.dumps(action, separators=(",", ":"), ensure_ascii=True)
+
             reward = 0.0
             done = True
+            err: Optional[str] = None
 
-        cumulative_reward += reward
-        print(f"[STEP] Step: {step_num}, Action: {action_json_str}, Reward: {reward}")
+            try:
+                result = await env.step(CacheAction(**action))
+                reward = float(result.reward or 0.0)
+                reward = max(0.0, min(1.0, reward))
+                done = bool(result.done)
+                obs_next = result.observation.model_dump()
+                raw_error = obs_next.get("last_action_error")
+                err = str(raw_error) if raw_error else None
+            except Exception:
+                done = True
+                reward = 0.0
+                err = None
 
-    # Compute final score as average reward
-    final_score = cumulative_reward / max(1, step_num)
-    final_score = max(0.01, min(0.99, final_score))
+            rewards.append(reward)
+            steps_taken = step
+            log_step(step=step, action=action_str, reward=reward, done=done, error=err)
 
-    print(f"[END] Score: {final_score}")
-    return final_score
+            if done:
+                break
+
+        mean_reward = sum(rewards) / max(1, len(rewards))
+        score = max(0.01, min(0.99, mean_reward))
+        success = score >= SUCCESS_SCORE_THRESHOLD
+        return score
+    finally:
+        try:
+            if env is not None:
+                await env.close()
+        except Exception:
+            pass
+        log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
 
 
 async def main() -> int:
-    """Run all tasks and report scores."""
-    try:
-        from context_router.client import MyEnv
-    except ImportError:
-        import sys, os
-        sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-        from context_router.client import MyEnv
-
-    all_scores: dict[str, float] = {}
-    env = MyEnv(ENV_SERVER_URL)
-
-    for task_id in TASKS:
-        try:
-            score = await run_task(task_id, env)
-            all_scores[task_id] = score
-        except Exception as e:
-            print(f"[END] Score: 0.01")
-            all_scores[task_id] = 0.01
-
-    await env.close()
-
-    # Summary
-    print("\n--- Final Scores ---")
-    for task_id, score in all_scores.items():
-        print(f"  {task_id}: {score:.4f}")
-
+    client = OpenAI(base_url=API_BASE_URL, api_key=HF_TOKEN)
+    for task in TASKS:
+        await run_task(task_name=task, client=client)
     return 0
 
 
 if __name__ == "__main__":
-    import asyncio
     raise SystemExit(asyncio.run(main()))

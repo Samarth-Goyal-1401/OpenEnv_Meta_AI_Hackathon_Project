@@ -4,6 +4,7 @@ from typing import Any
 VRAM_TARGET = 0.3
 MAX_STEPS = 50
 CRITICAL_TYPES = frozenset({"system_prompt", "code_snippet"})
+HIGH_ATTENTION_THRESHOLD = 0.6
 
 
 def _get(obs: Any, key: str, default: Any) -> Any:
@@ -25,11 +26,80 @@ def _block_get(block: Any, key: str, default: Any) -> Any:
     return getattr(block, key, default)
 
 
+def _block_id(block: Any) -> int | None:
+    value = _block_get(block, "block_id", None)
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _linear_ramp(value: float, threshold: float, scale: float) -> float:
+    """Linear ramp: gives partial credit as value approaches threshold."""
+    if value >= threshold:
+        return scale
+    return max(0.0, (value / threshold) * scale)
+
+
+def _important_block_ids(blocks: list[Any]) -> set[int]:
+    important_ids: set[int] = set()
+    for block in blocks:
+        block_id = _block_id(block)
+        if block_id is None:
+            continue
+        block_type = _block_get(block, "block_type", "")
+        attention = float(_block_get(block, "attention_score", 0.0))
+        if block_type in CRITICAL_TYPES or attention >= HIGH_ATTENTION_THRESHOLD:
+            important_ids.add(block_id)
+    return important_ids
+
+
+def _track_trajectory_retention(trajectory: list[Any], important_ids: set[int]) -> float:
+    """Track retention of the original important block IDs throughout the episode."""
+    if len(trajectory) < 2:
+        return 0.0
+    if not important_ids:
+        return 1.0
+
+    retention_over_time = []
+    for obs in trajectory:
+        current_ids = {
+            block_id
+            for block in _blocks(obs)
+            for block_id in [_block_id(block)]
+            if block_id is not None
+        }
+        retention_over_time.append(len(current_ids & important_ids) / len(important_ids))
+
+    return sum(retention_over_time) / len(retention_over_time)
+
+
+def _compute_vram_stability(vram_values: list[float]) -> float:
+    """Compute VRAM stability score based on variance and spikes."""
+    if len(vram_values) < 2:
+        return 1.0
+
+    max_vram = max(vram_values)
+    min_vram = min(vram_values)
+    vram_range = max_vram - min_vram
+
+    spike_penalty = 0.0
+    for i in range(1, len(vram_values)):
+        change = vram_values[i] - vram_values[i - 1]
+        if change > 0.15:
+            spike_penalty += (change - 0.15) * 0.5
+
+    stability = max(0.0, 1.0 - vram_range - min(0.3, spike_penalty))
+    return stability
+
+
 def grader_hard(trajectory: list[Any]) -> float:
     """
     Hard task:
     - 1.0 for full survival with strong critical retention and low average VRAM.
-    - Partial credit from survival, retention, VRAM control, and stability.
+    - Partial credit from survival, trajectory-based retention, VRAM control, and stability.
     """
     try:
         if not trajectory:
@@ -39,41 +109,45 @@ def grader_hard(trajectory: list[Any]) -> float:
         final = trajectory[-1]
         steps = len(trajectory)
 
-        oom_events = sum(1 for obs in trajectory if bool(_get(obs, "oom_triggered", False)))
+        oom_events = sum(
+            1 for obs in trajectory if bool(_get(obs, "oom_triggered", False))
+        )
         vram_values = [float(_get(obs, "vram_utilization", 1.0)) for obs in trajectory]
         avg_vram = sum(vram_values) / max(1, len(vram_values))
 
         initial_blocks = _blocks(first)
         final_blocks = _blocks(final)
-        initial_critical = {
-            _block_get(b, "block_type", "") for b in initial_blocks if _block_get(b, "block_type", "") in CRITICAL_TYPES
-        }
-        final_critical = {
-            _block_get(b, "block_type", "") for b in final_blocks if _block_get(b, "block_type", "") in CRITICAL_TYPES
+        important_ids = _important_block_ids(initial_blocks)
+        final_ids = {
+            block_id
+            for block in final_blocks
+            for block_id in [_block_id(block)]
+            if block_id is not None
         }
 
-        if initial_critical:
-            retention_ratio = len(final_critical) / len(initial_critical)
+        if important_ids:
+            final_retention_ratio = len(final_ids & important_ids) / len(important_ids)
         else:
-            retention_ratio = 1.0
+            final_retention_ratio = 1.0
+
+        trajectory_retention = _track_trajectory_retention(trajectory, important_ids)
+        stability_score = _compute_vram_stability(vram_values)
 
         if (
             oom_events == 0
             and steps >= MAX_STEPS
             and avg_vram < VRAM_TARGET
-            and retention_ratio >= 0.8
+            and final_retention_ratio >= 0.8
+            and trajectory_retention >= 0.8
         ):
             return 0.99
 
-        survival_component = min(0.35, (steps / MAX_STEPS) * 0.35)
-        retention_component = min(0.30, retention_ratio * 0.30)
-        vram_component = max(0.0, min(0.25, (1.0 - avg_vram) * 0.25))
-
-        if len(vram_values) > 1:
-            stability = max(0.0, 1.0 - (max(vram_values) - min(vram_values)))
-            stability_component = min(0.10, stability * 0.10)
-        else:
-            stability_component = 0.0
+        survival_component = _linear_ramp(steps, MAX_STEPS, 0.35)
+        retention_component = _linear_ramp(
+            (trajectory_retention + final_retention_ratio) / 2.0, 0.8, 0.30
+        )
+        vram_component = _linear_ramp(1.0 - avg_vram, 1.0 - VRAM_TARGET, 0.25)
+        stability_component = stability_score * 0.10
 
         oom_penalty = min(0.8, 0.30 * oom_events)
 
@@ -88,4 +162,3 @@ def grader_hard(trajectory: list[Any]) -> float:
 
     except Exception:
         return 0.01
-

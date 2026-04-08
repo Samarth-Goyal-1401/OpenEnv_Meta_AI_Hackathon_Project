@@ -26,21 +26,21 @@ def grader_easy(trajectory: list[Any]) -> float:
 
         vram_initial = float(_get(first, "vram_utilization", 1.0))
         vram_final = float(_get(final, "vram_utilization", 1.0))
-        oom_events = sum(1 for obs in trajectory if bool(_get(obs, "oom_triggered", False)))
+        oom_events = sum(
+            1 for obs in trajectory if bool(_get(obs, "oom_triggered", False))
+        )
         steps = len(trajectory)
 
-        if vram_final < VRAM_TARGET and oom_events == 0:
-            return 0.99
+        baseline = 0.01
 
         vram_drop = max(0.0, vram_initial - vram_final)
-        baseline = min(0.45, vram_drop / max(vram_initial, 1e-6) * 0.45)
+        vram_component = min(0.40, (vram_drop / max(vram_initial, 1e-6)) * 0.40)
         survival = min(0.35, (steps / MAX_STEPS) * 0.35)
-        below_target_bonus = 0.20 if vram_final < VRAM_TARGET else 0.0
-        oom_penalty = min(0.6, 0.2 * oom_events)
+        below_target_bonus = 0.22 if vram_final < VRAM_TARGET else 0.0
+        oom_penalty = min(0.6, 0.25 * oom_events)
 
-        score = baseline + survival + below_target_bonus - oom_penalty
-        return float(max(0.01, min(0.99, score)))
+        raw_score = baseline + vram_component + survival + below_target_bonus - oom_penalty
+        return float(max(0.01, min(0.98, raw_score)))
 
     except Exception:
         return 0.01
-
