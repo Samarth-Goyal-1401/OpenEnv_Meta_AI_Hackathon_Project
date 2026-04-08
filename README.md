@@ -64,7 +64,7 @@ openenv validate --url http://localhost:8000
 ## Grading Notes
 
 Current graders are bounded to keep scores safely below 1.00 formatting edge cases.
-The scoring interval is clamped to `[0.01, 0.98]`.
+The scoring interval is clamped to `[0.01, 0.99]`.
 
 Main grader files:
 

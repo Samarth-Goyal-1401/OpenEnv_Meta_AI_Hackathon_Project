@@ -52,10 +52,11 @@ Task-specific schemas:
 
 ## Reward Function
 Final episode grading is done by task-specific graders.
+All graders clamp final scores to `[0.01, 0.99]`.
 
 Easy grader:
 ```text
-if final_vram < 0.5 and oom_events == 0: score = 1.0
+if final_vram < 0.5 and oom_events == 0: score = 0.99
 else:
   vram_drop = max(0, vram_initial - vram_final)
   baseline = min(0.45, (vram_drop / max(vram_initial, 1e-6)) * 0.45)
@@ -68,7 +69,7 @@ else:
 Medium grader:
 ```text
 if final_vram < 0.4 and oom_events == 0 and system_kept and retention_ratio >= 0.8:
-  score = 1.0
+  score = 0.99
 else:
   vram_component = min(0.40, (vram_drop / max(vram_initial, 1e-6)) * 0.40)
   retention_component = (0.25 if system_kept else 0.0) + (retention_ratio * 0.20)
@@ -81,7 +82,7 @@ else:
 Hard grader:
 ```text
 if oom_events == 0 and steps >= 50 and avg_vram < 0.3 and retention_ratio >= 0.8:
-  score = 1.0
+  score = 0.99
 else:
   survival_component = min(0.35, (steps / 50) * 0.35)
   retention_component = min(0.30, retention_ratio * 0.30)
@@ -152,7 +153,7 @@ Expected outputs (March 31, 2026 run):
 
 ```text
 pytest: 38 passed
-baseline: easy=1.0000 medium=0.3657 hard=0.3721
+baseline: easy=0.9900 medium=0.3657 hard=0.3721
 openenv validate: passed=true (6/6 required checks)
 ```
 
