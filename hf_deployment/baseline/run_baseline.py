@@ -43,9 +43,9 @@ async def fetch_server_baseline(base_url: str) -> dict[str, float] | None:
         if not isinstance(payload, dict):
             return None
         return {
-            "easy": float(payload.get("easy", 0.0)),
-            "medium": float(payload.get("medium", 0.0)),
-            "hard": float(payload.get("hard", 0.0)),
+            "easy": float(payload.get("easy", 0.01)),
+            "medium": float(payload.get("medium", 0.01)),
+            "hard": float(payload.get("hard", 0.01)),
         }
     except Exception:
         return None
@@ -142,9 +142,9 @@ async def run_task(base_url: str, task_id: str, env: MyEnv) -> float:
             response = await client.post(f"{base_url}/grader", json=payload)
             response.raise_for_status()
             score = float(response.json().get("score", 0.0))
-        return float(max(0.0, min(1.0, score)))
+        return float(max(0.01, min(0.99, score)))
     except Exception:
-        return 0.0
+        return 0.01
 
 
 async def main() -> int:
@@ -155,9 +155,9 @@ async def main() -> int:
     base_url = args.base_url.rstrip("/")
     server_ready = await wait_for_server(base_url)
     if not server_ready:
-        print("Task easy score:   0.0000")
-        print("Task medium score: 0.0000")
-        print("Task hard score:   0.0000")
+        print("Task easy score:   0.0100")
+        print("Task medium score: 0.0100")
+        print("Task hard score:   0.0100")
         return 0
 
     scores = await fetch_server_baseline(base_url)

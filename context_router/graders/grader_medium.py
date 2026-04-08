@@ -104,7 +104,7 @@ def grader_medium(trajectory: list[Any]) -> float:
     """
     try:
         if not trajectory:
-            return 0.0
+            return 0.01
 
         first = trajectory[0]
         final = trajectory[-1]
@@ -151,7 +151,7 @@ def grader_medium(trajectory: list[Any]) -> float:
             and system_kept
             and final_retention_ratio >= 0.8
         ):
-            return 1.0
+            return 0.99
 
         vram_drop = max(0.0, vram_initial - vram_final)
         vram_component = _linear_ramp(vram_drop / max(vram_initial, 1e-6), 0.5, 0.40)
@@ -171,7 +171,7 @@ def grader_medium(trajectory: list[Any]) -> float:
             + stability_component
             - oom_penalty
         )
-        return float(max(0.0, min(1.0, score)))
+        return float(max(0.01, min(0.99, score)))
 
     except Exception:
-        return 0.0
+        return 0.01

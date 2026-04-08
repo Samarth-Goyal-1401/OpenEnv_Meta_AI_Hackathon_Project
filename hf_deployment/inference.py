@@ -212,8 +212,8 @@ async def run_task(task_id: str, env) -> float:
         done = step_result.done
     except Exception as e:
         print(f"[STEP] Step: 1, Action: {{}}, Reward: 0.0")
-        print(f"[END] Score: 0.0")
-        return 0.0
+        print(f"[END] Score: 0.01")
+        return 0.01
 
     cumulative_reward = 0.0
     step_num = 0
@@ -248,7 +248,7 @@ async def run_task(task_id: str, env) -> float:
 
     # Compute final score as average reward
     final_score = cumulative_reward / max(1, step_num)
-    final_score = max(0.0, min(1.0, final_score))
+    final_score = max(0.01, min(0.99, final_score))
 
     print(f"[END] Score: {final_score}")
     return final_score
@@ -271,8 +271,8 @@ async def main() -> int:
             score = await run_task(task_id, env)
             all_scores[task_id] = score
         except Exception as e:
-            print(f"[END] Score: 0.0")
-            all_scores[task_id] = 0.0
+            print(f"[END] Score: 0.01")
+            all_scores[task_id] = 0.01
 
     await env.close()
 

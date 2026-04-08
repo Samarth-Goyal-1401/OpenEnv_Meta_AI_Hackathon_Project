@@ -167,7 +167,7 @@ def grader_endpoint(req: GraderRequest) -> dict[str, float]:
     try:
         trajectory = [_to_observation(item) for item in req.trajectory]
         score = grader_fn(trajectory)
-        return {"score": float(max(0.0, min(1.0, score)))}
+        return {"score": float(max(0.01, min(0.99, score)))}
     except HTTPException:
         raise
     except (TypeError, ValueError) as e:
@@ -175,7 +175,7 @@ def grader_endpoint(req: GraderRequest) -> dict[str, float]:
         raise HTTPException(status_code=422, detail="Invalid trajectory payload") from e
     except Exception as e:
         logger.error("/grader failed for task '%s': %s", req.task_id, e, exc_info=True)
-        return {"score": 0.0}
+        return {"score": 0.01}
 
 
 @app.post("/baseline")
@@ -186,7 +186,7 @@ def baseline_endpoint() -> dict[str, float]:
             results[task_name] = float(_run_baseline_episode(task_name))
         except Exception as e:
             logger.error("Baseline failed for task '%s': %s", task_name, e, exc_info=True)
-            results[task_name] = 0.0
+            results[task_name] = 0.01
     return results
 
 
