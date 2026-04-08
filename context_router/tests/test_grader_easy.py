@@ -3,16 +3,17 @@ from context_router.graders.grader_easy import grader_easy
 
 PERFECT = [
     {
-        "vram_utilization": 0.80,
+        "vram_utilization": 1.00,
         "incoming_tokens": 120,
         "memory_blocks": [],
         "oom_triggered": False,
         "message": "start",
         "done": False,
         "reward": 0.0,
-    },
+    }
+] * 49 + [
     {
-        "vram_utilization": 0.30,
+        "vram_utilization": 0.00,
         "incoming_tokens": 80,
         "memory_blocks": [],
         "oom_triggered": False,
@@ -46,12 +47,12 @@ PARTIAL = [
 ]
 
 
-def test_perfect_returns_one() -> None:
-    assert grader_easy(PERFECT) == 1.0
+def test_perfect_returns_high() -> None:
+    assert grader_easy(PERFECT) >= 0.98
 
 
-def test_empty_returns_zero() -> None:
-    assert grader_easy(EMPTY) == 0.0
+def test_empty_returns_baseline() -> None:
+    assert grader_easy(EMPTY) == 0.01
 
 
 def test_partial_between_zero_and_one() -> None:

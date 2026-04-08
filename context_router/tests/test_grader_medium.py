@@ -66,12 +66,12 @@ PARTIAL = [
 ]
 
 
-def test_perfect_returns_one() -> None:
-    assert grader_medium(PERFECT) == 1.0
+def test_perfect_returns_high() -> None:
+    assert grader_medium(PERFECT) >= 0.98
 
 
-def test_empty_returns_zero() -> None:
-    assert grader_medium(EMPTY) == 0.0
+def test_empty_returns_baseline() -> None:
+    assert grader_medium(EMPTY) == 0.01
 
 
 def test_partial_between_zero_and_one() -> None:

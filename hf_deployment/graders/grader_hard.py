@@ -140,7 +140,7 @@ def grader_hard(trajectory: list[Any]) -> float:
             and final_retention_ratio >= 0.8
             and trajectory_retention >= 0.8
         ):
-            return 0.99
+            return 0.98
 
         survival_component = _linear_ramp(steps, MAX_STEPS, 0.35)
         retention_component = _linear_ramp(
@@ -158,7 +158,7 @@ def grader_hard(trajectory: list[Any]) -> float:
             + stability_component
             - oom_penalty
         )
-        return float(max(0.01, min(0.99, score)))
+        return float(max(0.01, min(0.98, score)))
 
     except Exception:
         return 0.01

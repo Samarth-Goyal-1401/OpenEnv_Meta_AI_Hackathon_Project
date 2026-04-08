@@ -99,6 +99,7 @@ async def run_task(task_name: str, client: OpenAI) -> float:
     steps_taken = 0
     score = 0.01
     success = False
+    end_logged = False
 
     log_start(task=task_name, env=BENCHMARK, model=MODEL_NAME)
 
@@ -115,8 +116,11 @@ async def run_task(task_name: str, client: OpenAI) -> float:
         except Exception:
             try:
                 result = await env.reset()
-            except Exception:
-                log_step(step=1, action="{}", reward=0.00, done=True, error=None)
+            except Exception as e:
+                log_step(step=1, action="{}", reward=0.00, done=True, error=str(e))
+                rewards = [0.00]
+                log_end(success=False, steps=0, score=0.01, rewards=rewards)
+                end_logged = True
                 return 0.01
 
         for step in range(1, MAX_STEPS + 1):
@@ -152,7 +156,7 @@ async def run_task(task_name: str, client: OpenAI) -> float:
                 break
 
         mean_reward = sum(rewards) / max(1, len(rewards))
-        score = max(0.01, min(0.99, mean_reward))
+        score = max(0.01, min(0.98, mean_reward))
         success = score >= SUCCESS_SCORE_THRESHOLD
         return score
     finally:
@@ -161,7 +165,8 @@ async def run_task(task_name: str, client: OpenAI) -> float:
                 await env.close()
         except Exception:
             pass
-        log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
+        if not end_logged:
+            log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
 
 
 async def main() -> int:
