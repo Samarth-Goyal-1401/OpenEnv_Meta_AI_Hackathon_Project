@@ -1,23 +1,65 @@
 #!/usr/bin/env python3
+"""
+Inference Script — Edge GPU Context Router
+============================================
+MANDATORY HACKATHON REQUIREMENTS:
+  1. Uses the official `openai` Python package.
+  2. Reads API_BASE_URL, MODEL_NAME, HF_TOKEN from environment.
+  3. Emits structured stdout logs: [START], [STEP], [END].
+  4. Falls back to heuristic action if LLM fails or times out.
+  5. Runtime < 20 minutes on vcpu=2, memory=8gb.
+
+STDOUT FORMAT:
+  [START] task=<task_name> env=<benchmark> model=<model_name>
+  [STEP]  step=<n> action=<action_str> reward=<0.00> done=<true|false> error=<msg|null>
+  [END]   success=<true|false> steps=<n> score=<score> rewards=<r1,r2,...,rn>
+"""
+
 import json
 import os
-import random
 import sys
 import time
+from typing import List, Optional
 
-import httpx
 from openai import OpenAI
 
+# ── Configuration ────────────────────────────────────────────────────────────
 API_BASE_URL = os.environ.get('API_BASE_URL', 'https://api.openai.com/v1')
-MODEL_NAME = os.environ.get('MODEL_NAME', 'gpt-4o-mini') # Updated default to the official Meta OpenEnv model
+MODEL_NAME = os.environ.get('MODEL_NAME', 'gpt-4o-mini')
 HF_TOKEN = os.environ.get('HF_TOKEN') or os.environ.get('OPENAI_API_KEY', '')
 ENV_SERVER_URL = os.environ.get('ENV_SERVER_URL', 'http://localhost:8000')
 
 LLM_TIMEOUT = 15
 MAX_STEPS_PER_TASK = 50
 TASKS = ['easy', 'medium', 'hard']
+BENCHMARK = 'context_router'
 
 client = OpenAI(base_url=API_BASE_URL, api_key=HF_TOKEN or 'no-key-provided')
+
+# ── Structured Logging Helpers ───────────────────────────────────────────────
+
+def log_start(task: str, env: str, model: str) -> None:
+    print(f"[START] task={task} env={env} model={model}", flush=True)
+
+
+def log_step(step: int, action: str, reward: float, done: bool, error: Optional[str]) -> None:
+    error_val = error if error else "null"
+    done_val = str(done).lower()
+    print(
+        f"[STEP] step={step} action={action} reward={reward:.2f} done={done_val} error={error_val}",
+        flush=True,
+    )
+
+
+def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> None:
+    rewards_str = ",".join(f"{r:.2f}" for r in rewards)
+    print(
+        f"[END] success={str(success).lower()} steps={steps} score={score:.2f} rewards={rewards_str}",
+        flush=True,
+    )
+
+
+# ── System Prompt ────────────────────────────────────────────────────────────
 
 SYSTEM_PROMPT = """You are a KV-cache memory management agent. Your goal is to prevent Out-of-Memory (OOM) events by choosing the optimal memory tactic for one block per step.
 
@@ -114,6 +156,8 @@ Final check before outputting:
   - Is VRAM >= 0.90 and tactic == "retain"? If yes, CHANGE IT.
 """
 
+
+# ── LLM + Prompt Building ───────────────────────────────────────────────────
 
 def _build_user_prompt(task_id: str, obs: dict, history: list[dict]) -> str:
     blocks = obs.get('memory_blocks', [])
@@ -286,82 +330,120 @@ def _fallback_action(task_id: str, obs: dict) -> dict:
 
     return action
 
+
+# ── Task Runner ──────────────────────────────────────────────────────────────
+
 async def run_task(task_id: str, env) -> float:
-    print(f"[START] Task: {task_id}")
+    """Run one task episode and emit structured [START]/[STEP]/[END] logs."""
+    rewards: List[float] = []
+    steps_taken = 0
+    score = 0.0
+    success = False
+
+    log_start(task=task_id, env=BENCHMARK, model=MODEL_NAME)
+
     try:
         step_result = await env.reset()
         obs = step_result.observation.model_dump()
         done = step_result.done
     except Exception as e:
-        print(f"[STEP] Step: 1, Action: {{}}, Reward: 0.0")
-        print(f"[END] Score: 0.0")
+        log_step(step=1, action="{}", reward=0.0, done=True, error=str(e))
+        log_end(success=False, steps=1, score=0.0, rewards=[0.0])
         return 0.0
 
     cumulative_reward = 0.0
-    step_num = 0
-    history_buffer = []
+    history_buffer: list[dict] = []
 
-    for i in range(MAX_STEPS_PER_TASK):
-        if done:
-            break
+    try:
+        for i in range(MAX_STEPS_PER_TASK):
+            if done:
+                break
 
-        step_num = i + 1
-        action_dict = _call_llm(task_id, obs, history_buffer)
-        if action_dict is None:
-            action_dict = _fallback_action(task_id, obs)
+            step_num = i + 1
+            action_dict = _call_llm(task_id, obs, history_buffer)
+            if action_dict is None:
+                action_dict = _fallback_action(task_id, obs)
 
-        action_json_str = json.dumps(action_dict)
+            action_json_str = json.dumps(action_dict)
+            error_msg: Optional[str] = None
 
-        try:
-            from context_router.models import CacheAction
-            cache_action = CacheAction(**action_dict)
-            step_resp = await env.step(cache_action)
-            obs = step_resp.observation.model_dump()
-            reward = float(step_resp.reward)
-            done = bool(step_resp.done)
-        except Exception:
-            reward = 0.0
-            done = True
+            try:
+                from context_router.models import CacheAction
+                cache_action = CacheAction(**action_dict)
+                step_resp = await env.step(cache_action)
+                obs = step_resp.observation.model_dump()
+                reward = float(step_resp.reward)
+                done = bool(step_resp.done)
+            except Exception as ex:
+                reward = 0.0
+                done = True
+                error_msg = str(ex)
 
-        history_buffer.append({
-            'block_id': action_dict.get('target_block_id'),
-            'tactic': action_dict.get('tactic'),
-            'reward': reward,
-        })
-        if len(history_buffer) > 3:
-            history_buffer.pop(0)
+            history_buffer.append({
+                'block_id': action_dict.get('target_block_id'),
+                'tactic': action_dict.get('tactic'),
+                'reward': reward,
+            })
+            if len(history_buffer) > 3:
+                history_buffer.pop(0)
 
-        cumulative_reward += reward
-        print(f"[STEP] Step: {step_num}, Action: {action_json_str}, Reward: {reward}")
+            rewards.append(reward)
+            cumulative_reward += reward
+            steps_taken = step_num
 
-    final_score = cumulative_reward / max(1, step_num)
-    final_score = max(0.0, min(1.0, final_score))
-    print(f"[END] Score: {final_score}")
-    return final_score
+            log_step(
+                step=step_num,
+                action=action_json_str,
+                reward=reward,
+                done=done,
+                error=error_msg,
+            )
+
+            if done:
+                break
+
+        score = cumulative_reward / max(1, steps_taken)
+        score = max(0.0, min(1.0, score))
+        success = score >= 0.1
+
+    finally:
+        log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
+
+    return score
+
+
+# ── Main ─────────────────────────────────────────────────────────────────────
 
 async def main() -> int:
     try:
         from context_router.client import MyEnv
     except ImportError:
-        import sys, os
         sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
         from context_router.client import MyEnv
 
-    all_scores = {}
+    all_scores: dict[str, float] = {}
     env = MyEnv(ENV_SERVER_URL)
+
     for task_id in TASKS:
         try:
             score = await run_task(task_id, env)
             all_scores[task_id] = score
         except Exception as e:
-            print(f"[END] Score: 0.0")
+            # Emit [END] even on unhandled exception
+            log_end(success=False, steps=0, score=0.0, rewards=[])
             all_scores[task_id] = 0.0
 
-    await env.close()
+    try:
+        await env.close()
+    except Exception as e:
+        print(f"[DEBUG] env.close() error: {e}", flush=True)
+
     print("\n--- Final Scores ---")
     for task_id, score in all_scores.items():
         print(f"  {task_id}: {score:.4f}")
+
     return 0
+
 
 if __name__ == '__main__':
     import asyncio
