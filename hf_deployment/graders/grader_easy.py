@@ -40,7 +40,7 @@ def grader_easy(trajectory: list[Any]) -> float:
         oom_penalty = min(0.6, 0.25 * oom_events)
 
         raw_score = baseline + vram_component + survival + below_target_bonus - oom_penalty
-        return float(max(0.01, min(0.98, raw_score)))
+        return float(max(0.01, min(0.99, raw_score)))
 
     except Exception:
         return 0.01
